@@ -124,11 +124,28 @@ final class HostInfoTests: XCTestCase {
         let fingerprint = HostInfo.fingerprint()
         XCTAssertFalse(fingerprint.chip.isEmpty)
         XCTAssertNotEqual(fingerprint.chip, "unknown")
-        XCTAssertGreaterThan(fingerprint.performanceCores, 0)
-        XCTAssertGreaterThan(fingerprint.efficiencyCores, 0)
         XCTAssertGreaterThan(fingerprint.memoryBytes, 4_000_000_000)
         XCTAssertNotEqual(fingerprint.osBuild, "unknown")
         XCTAssertFalse(fingerprint.osVersion.isEmpty)
+
+        // Core-level sysctls don't exist inside VMs (CI runners included):
+        // the fingerprint must degrade to 0 there and report real counts on
+        // bare metal — same rule as IOReport keys, never assume presence.
+        if sysctlKeyExists("hw.perflevel0.physicalcpu") {
+            XCTAssertGreaterThan(fingerprint.performanceCores, 0)
+        } else {
+            XCTAssertEqual(fingerprint.performanceCores, 0)
+        }
+        if sysctlKeyExists("hw.perflevel1.physicalcpu") {
+            XCTAssertGreaterThan(fingerprint.efficiencyCores, 0)
+        } else {
+            XCTAssertEqual(fingerprint.efficiencyCores, 0)
+        }
+    }
+
+    private func sysctlKeyExists(_ name: String) -> Bool {
+        var size = 0
+        return sysctlbyname(name, nil, &size, nil, 0) == 0
     }
 }
 
