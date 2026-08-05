@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/ryouol/Loupe/main/protocol/events.schema.json",
+  "title": "Loupe inference event envelope (v1)",
+  "description": "One event per NDJSON line. ts is mach_continuous_time nanoseconds on the emitter's clock; the clock_sync handshake maps emitter timestamps onto the daemon's clock. Changing anything here means bumping v, updating fixtures, and updating every adapter in the same commit.",
+  "type": "object",
+  "required": ["v", "ts", "runId", "event", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "v": { "const": 1 },
+    "ts": { "type": "integer", "minimum": 0 },
+    "runId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "requestId": { "type": ["string", "null"], "minLength": 1, "maxLength": 128 },
+    "event": {
+      "enum": [
+        "session_start",
+        "clock_sync",
+        "model_load_start",
+        "model_load_end",
+        "request_start",
+        "prefill_end",
+        "decode_tick",
+        "request_end",
+        "error"
+      ]
+    },
+    "payload": { "type": "object" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "event": { "const": "session_start" } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/sessionStart" } } }
+    },
+    {
+      "if": { "properties": { "event": { "const": "clock_sync" } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/clockSync" } } }
+    },
+    {
+      "if": { "properties": { "event": { "const": "model_load_start" } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/modelLoadStart" } } }
+    },
+    {
+      "if": { "properties": { "event": { "const": "model_load_end" } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/modelLoadEnd" } } }
+    },
+    {
+      "if": { "properties": { "event": { "const": "request_start" } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/requestStart" } } }
+    },
+    {
+      "if": { "properties": { "event": { "const": "prefill_end" } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/prefillEnd" } } }
+    },
+    {
+      "if": { "properties": { "event": { "const": "decode_tick" } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/decodeTick" } } }
+    },
+    {
+      "if": { "properties": { "event": { "const": "request_end" } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/requestEnd" } } }
+    },
+    {
+      "if": { "properties": { "event": { "const": "error" } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/errorPayload" } } }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "enum": ["request_start", "prefill_end", "decode_tick", "request_end"]
+          }
+        }
+      },
+      "then": {
+        "required": ["requestId"],
+        "properties": { "requestId": { "type": "string" } }
+      }
+    }
+  ],
+  "$defs": {
+    "sessionStart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["adapter", "adapterVersion", "runtime", "pid"],
+      "properties": {
+        "adapter": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "adapterVersion": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "runtime": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "pid": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "clockSync": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["t0", "t1", "t2", "t3"],
+      "properties": {
+        "t0": { "type": "integer", "minimum": 0 },
+        "t1": { "type": "integer", "minimum": 0 },
+        "t2": { "type": "integer", "minimum": 0 },
+        "t3": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "modelLoadStart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["modelId"],
+      "properties": {
+        "modelId": { "type": "string", "minLength": 1, "maxLength": 1024 }
+      }
+    },
+    "modelLoadEnd": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["modelId", "ok"],
+      "properties": {
+        "modelId": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "ok": { "type": "boolean" },
+        "weightsBytes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "requestStart": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "promptTokens": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "prefillEnd": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["promptTokens"],
+      "properties": {
+        "promptTokens": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "decodeTick": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["outputTokens", "kvCacheBytes", "activeMemoryBytes"],
+      "properties": {
+        "outputTokens": { "type": "integer", "minimum": 0 },
+        "kvCacheBytes": { "type": "integer", "minimum": 0 },
+        "activeMemoryBytes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "requestEnd": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["outputTokens", "finishReason"],
+      "properties": {
+        "outputTokens": { "type": "integer", "minimum": 0 },
+        "finishReason": { "type": "string", "minLength": 1, "maxLength": 64 }
+      }
+    },
+    "errorPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "message": { "type": "string", "maxLength": 4096 }
+      }
+    }
+  }
+}
