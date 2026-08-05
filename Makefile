@@ -10,7 +10,7 @@ SWIFT_PATHS := Sources Tests Package.swift
 
 .DEFAULT_GOAL := help
 
-.PHONY: help bootstrap generate build build-spm build-app test test-swift test-python lint format replay clean
+.PHONY: help bootstrap bootstrap-mlx generate build build-spm build-app test test-swift test-python lint format replay record-fixture clean
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -25,8 +25,11 @@ generate: Local.xcconfig ## Generate Loupe.xcodeproj (xcodegen owns the pbxproj)
 
 bootstrap: generate ## Generate project, resolve SPM deps, set up the Python venv
 	swift package resolve
-	$(UV) venv --python 3.12 $(VENV)
+	test -d $(VENV) || $(UV) venv --python 3.12 $(VENV)
 	$(UV) pip install --python $(PYTHON) -e "$(ADAPTER)[dev]"
+
+bootstrap-mlx: bootstrap ## bootstrap + mlx-lm, needed only to record fixtures
+	$(UV) pip install --python $(PYTHON) -e "$(ADAPTER)[dev,mlx]"
 
 build: build-spm build-app ## Build the SPM targets and the app
 
@@ -51,8 +54,16 @@ lint: ## swift-format lint --strict
 format: ## swift-format format in place
 	swift-format format --in-place --recursive $(SWIFT_PATHS)
 
-replay: ## Render fixtures/baseline-session.ndjson (lands in M0.4)
-	@echo "make replay: no fixture yet. baseline-session is captured in M0.4."
+replay: generate ## Render fixtures/baseline-session in the app, no root needed
+	xcodebuild build -scheme $(SCHEME) -destination '$(DESTINATION)' \
+		-derivedDataPath DerivedData -quiet CODE_SIGNING_ALLOWED=NO
+	LOUPE_REPLAY_FIXTURE=$(CURDIR)/fixtures/baseline-session \
+		./DerivedData/Build/Products/Debug/Loupe.app/Contents/MacOS/Loupe
+
+NAME ?= baseline-session
+DURATION ?= 60
+record-fixture: ## Record fixtures/$(NAME) from a real MLX run (needs bootstrap-mlx)
+	bash scripts/record-fixture.sh $(NAME) $(DURATION)
 
 clean: ## Remove build artifacts
 	rm -rf .build DerivedData Loupe.xcodeproj $(VENV)

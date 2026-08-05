@@ -13,6 +13,7 @@ let package = Package(
         .library(name: "LoupeSampler", targets: ["LoupeSampler"]),
         .library(name: "LoupeApp", targets: ["LoupeApp"]),
         .executable(name: "loupedaemon", targets: ["loupedaemon"]),
+        .executable(name: "loupe-record", targets: ["loupe-record"]),
         .executable(name: "loupe-llamacpp", targets: ["loupe-llamacpp"]),
     ],
     targets: [
@@ -26,6 +27,10 @@ let package = Package(
         .executableTarget(
             name: "loupedaemon",
             dependencies: ["LoupeCore", "LoupeSampler", "LoupeStore"]
+        ),
+        .executableTarget(
+            name: "loupe-record",
+            dependencies: ["LoupeCore", "LoupeSampler"]
         ),
         .executableTarget(
             name: "loupe-llamacpp",
