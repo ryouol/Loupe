@@ -20,14 +20,6 @@ public actor SessionStore {
     public nonisolated let databaseURL: URL
     private let pool: DatabasePool
 
-    public static func defaultDirectory() throws -> URL {
-        try FileManager.default.url(
-            for: .applicationSupportDirectory, in: .userDomainMask,
-            appropriateFor: nil, create: true
-        )
-        .appendingPathComponent("Loupe/sessions", isDirectory: true)
-    }
-
     /// Opens or creates `<directory>/<runId>.sqlite` and upserts the run row.
     public init(
         runId: String, directory: URL, startedAtNs: UInt64, host: HostFingerprint
@@ -39,9 +31,8 @@ public actor SessionStore {
         self.pool = try DatabasePool(path: databaseURL.path)
         try LoupeSchema.migrator.migrate(pool)
 
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        let hostJSON = String(decoding: try encoder.encode(host), as: UTF8.self)
+        let hostJSON = String(
+            decoding: try JSONEncoder.deterministic().encode(host), as: UTF8.self)
         let id = runId
         try pool.write { db in
             try db.execute(
@@ -133,13 +124,14 @@ public actor SessionStore {
                     INSERT INTO inference_events (run_id, ts_ns, request_id, event, payload)
                     VALUES (?, ?, ?, ?, ?)
                     """)
+            let encoder = JSONEncoder.deterministic()
             for envelope in events {
                 try statement.execute(arguments: [
                     envelope.runId,
                     Int64(bitPattern: envelope.ts),
                     envelope.requestId,
                     envelope.kind.rawValue,
-                    try Self.payloadJSON(envelope.payload),
+                    String(decoding: try encoder.encode(envelope.payload), as: UTF8.self),
                 ])
             }
         }
@@ -188,10 +180,11 @@ public actor SessionStore {
         }
     }
 
-    /// Rows rebuild through the protocol decoder, so corruption surfaces.
+    /// Kind and payload validate on the way out, so corruption surfaces as a
+    /// typed error instead of silently wrong data.
     public func events(in range: ClosedRange<UInt64>? = nil) throws -> [EventEnvelope] {
         let id = runId
-        let decoder = EventLineDecoder()
+        let decoder = JSONDecoder()
         return try pool.read { db in
             try Row.fetchAll(
                 db,
@@ -199,23 +192,21 @@ public actor SessionStore {
                     "SELECT * FROM inference_events WHERE run_id = ? \(Self.rangeClause(range)) ORDER BY ts_ns",
                 arguments: Self.rangeArguments(id, range)
             ).map { row in
+                let eventName: String = row["event"]
                 let payloadJSON: String = row["payload"]
                 let requestId: String? = row["request_id"]
-                var object: [String: Any] = [
-                    "v": EventProtocol.version,
-                    "ts": NSNumber(value: UInt64(bitPattern: row["ts_ns"] as Int64)),
-                    "runId": row["run_id"] as String,
-                    "event": row["event"] as String,
-                    "payload": (try? JSONSerialization.jsonObject(with: Data(payloadJSON.utf8)))
-                        ?? [String: Any](),
-                ]
-                if let requestId { object["requestId"] = requestId }
-                guard let line = try? JSONSerialization.data(withJSONObject: object),
-                    case .success(let envelope) = decoder.decode(line: line)
+                guard let kind = EventKind(rawValue: eventName),
+                    let payload = try? EventPayload.decode(
+                        kind: kind, from: Data(payloadJSON.utf8), using: decoder),
+                    !(kind.requiresRequestID && requestId == nil)
                 else {
-                    throw StoreError.corruptEventRow(payloadJSON)
+                    throw StoreError.corruptEventRow("\(eventName): \(payloadJSON)")
                 }
-                return envelope
+                return EventEnvelope(
+                    ts: UInt64(bitPattern: row["ts_ns"]),
+                    runId: row["run_id"],
+                    requestId: requestId,
+                    payload: payload)
             }
         }
     }
@@ -251,23 +242,5 @@ public actor SessionStore {
     ) -> StatementArguments {
         guard let range else { return [runId] }
         return [runId, Int64(bitPattern: range.lowerBound), Int64(bitPattern: range.upperBound)]
-    }
-
-    private static func payloadJSON(_ payload: EventPayload) throws -> String {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        let data: Data
-        switch payload {
-        case .sessionStart(let p): data = try encoder.encode(p)
-        case .clockSync(let p): data = try encoder.encode(p)
-        case .modelLoadStart(let p): data = try encoder.encode(p)
-        case .modelLoadEnd(let p): data = try encoder.encode(p)
-        case .requestStart(let p): data = try encoder.encode(p)
-        case .prefillEnd(let p): data = try encoder.encode(p)
-        case .decodeTick(let p): data = try encoder.encode(p)
-        case .requestEnd(let p): data = try encoder.encode(p)
-        case .error(let p): data = try encoder.encode(p)
-        }
-        return String(decoding: data, as: UTF8.self)
     }
 }

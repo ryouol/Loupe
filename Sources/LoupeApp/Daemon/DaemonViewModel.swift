@@ -67,7 +67,7 @@ public final class DaemonViewModel {
         let stream = connection.activate()
         streamTask = Task { [weak self] in
             self?.handshake = await connection.handshake()
-            connection.startStream(intervalMs: 100)
+            connection.startStream()
             for await sample in stream {
                 guard let self, !Task.isCancelled else { break }
                 self.latestSample = sample

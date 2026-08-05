@@ -39,7 +39,7 @@ public actor UnprivilegedTelemetrySource: TelemetrySource {
 
     public init(
         targetPID: Int32?,
-        cadence: Duration = .milliseconds(100),
+        cadence: Duration = Sampling.defaultCadence,
         timebase: Timebase = .live()
     ) {
         self.targetPID = targetPID

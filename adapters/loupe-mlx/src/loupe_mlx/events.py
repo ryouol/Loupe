@@ -9,9 +9,11 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, ClassVar, Union
+from typing import Any, ClassVar, Union, get_args
 
 PROTOCOL_VERSION = 1
+# Shared with the schema (x-limits.maxLineBytes) and the Swift decoder;
+# conformance tests in both languages pin the three together.
 MAX_LINE_BYTES = 65536
 
 
@@ -254,20 +256,7 @@ Payload = Union[
     ErrorEvent,
 ]
 
-PAYLOAD_TYPES: dict[str, type] = {
-    cls.EVENT: cls
-    for cls in (
-        SessionStart,
-        ClockSync,
-        ModelLoadStart,
-        ModelLoadEnd,
-        RequestStart,
-        PrefillEnd,
-        DecodeTick,
-        RequestEnd,
-        ErrorEvent,
-    )
-}
+PAYLOAD_TYPES: dict[str, type] = {cls.EVENT: cls for cls in get_args(Payload)}
 
 # Request-scoped events are meaningless without a request id.
 REQUEST_SCOPED_EVENTS = frozenset(

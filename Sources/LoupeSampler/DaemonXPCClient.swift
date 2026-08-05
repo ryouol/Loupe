@@ -70,7 +70,7 @@ public final class DaemonXPCClient: @unchecked Sendable {
         return stream
     }
 
-    public func startStream(intervalMs: Int = 100) {
+    public func startStream(intervalMs: Int = Sampling.defaultIntervalMs) {
         (connection.remoteObjectProxy as? LoupeDaemonXPCProtocol)?
             .startSampleStream(intervalMs: intervalMs)
     }

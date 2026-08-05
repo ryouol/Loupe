@@ -1,3 +1,5 @@
+import Foundation
+
 /// Event protocol v1 — hand-written mirror of `protocol/events.schema.json`.
 /// Drift is caught by cross-language round-trip and schema-conformance tests
 /// over the same committed examples.
@@ -157,6 +159,46 @@ public enum EventPayload: Sendable, Equatable {
     }
 }
 
+extension EventPayload: Encodable {
+    public func encode(to encoder: any Encoder) throws {
+        switch self {
+        case .sessionStart(let p): try p.encode(to: encoder)
+        case .clockSync(let p): try p.encode(to: encoder)
+        case .modelLoadStart(let p): try p.encode(to: encoder)
+        case .modelLoadEnd(let p): try p.encode(to: encoder)
+        case .requestStart(let p): try p.encode(to: encoder)
+        case .prefillEnd(let p): try p.encode(to: encoder)
+        case .decodeTick(let p): try p.encode(to: encoder)
+        case .requestEnd(let p): try p.encode(to: encoder)
+        case .error(let p): try p.encode(to: encoder)
+        }
+    }
+}
+
+extension EventPayload {
+    /// Decodes a bare payload object by kind — for callers (like the store)
+    /// that persist kind and payload separately from the envelope.
+    public static func decode(
+        kind: EventKind, from data: Data, using decoder: JSONDecoder = JSONDecoder()
+    ) throws -> EventPayload {
+        switch kind {
+        case .sessionStart:
+            return .sessionStart(try decoder.decode(SessionStartPayload.self, from: data))
+        case .clockSync: return .clockSync(try decoder.decode(ClockSyncPayload.self, from: data))
+        case .modelLoadStart:
+            return .modelLoadStart(try decoder.decode(ModelLoadStartPayload.self, from: data))
+        case .modelLoadEnd:
+            return .modelLoadEnd(try decoder.decode(ModelLoadEndPayload.self, from: data))
+        case .requestStart:
+            return .requestStart(try decoder.decode(RequestStartPayload.self, from: data))
+        case .prefillEnd: return .prefillEnd(try decoder.decode(PrefillEndPayload.self, from: data))
+        case .decodeTick: return .decodeTick(try decoder.decode(DecodeTickPayload.self, from: data))
+        case .requestEnd: return .requestEnd(try decoder.decode(RequestEndPayload.self, from: data))
+        case .error: return .error(try decoder.decode(ErrorPayload.self, from: data))
+        }
+    }
+}
+
 public struct EventEnvelope: Sendable, Equatable {
     public let v: Int
     /// Continuous-clock ns on the *emitter's* clock; clock_sync maps it here.
@@ -236,16 +278,6 @@ extension EventEnvelope: Codable {
         try container.encode(runId, forKey: .runId)
         try container.encodeIfPresent(requestId, forKey: .requestId)
         try container.encode(kind, forKey: .event)
-        switch payload {
-        case .sessionStart(let p): try container.encode(p, forKey: .payload)
-        case .clockSync(let p): try container.encode(p, forKey: .payload)
-        case .modelLoadStart(let p): try container.encode(p, forKey: .payload)
-        case .modelLoadEnd(let p): try container.encode(p, forKey: .payload)
-        case .requestStart(let p): try container.encode(p, forKey: .payload)
-        case .prefillEnd(let p): try container.encode(p, forKey: .payload)
-        case .decodeTick(let p): try container.encode(p, forKey: .payload)
-        case .requestEnd(let p): try container.encode(p, forKey: .payload)
-        case .error(let p): try container.encode(p, forKey: .payload)
-        }
+        try container.encode(payload, forKey: .payload)
     }
 }

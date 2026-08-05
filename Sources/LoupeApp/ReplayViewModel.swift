@@ -3,8 +3,9 @@ import LoupeCore
 import LoupeSampler
 import Observation
 
-/// Loads a session pair (`<base>.ndjson` + `<base>.system.ndjson`) — the
-/// headless, testable half of the session screen.
+/// Loads a session pair — the headless, testable half of the session screen.
+/// Parsing runs off the main actor; only the final assignment touches UI
+/// state.
 @MainActor
 @Observable
 public final class ReplayViewModel {
@@ -25,6 +26,8 @@ public final class ReplayViewModel {
     }
 
     public private(set) var samples: [SystemSample] = []
+    public private(set) var chartPoints: [ChartPoint] = []
+    public private(set) var processChartPoints: [ChartPoint] = []
     public private(set) var milestones: [Milestone] = []
     public private(set) var decodeTickCount = 0
     public private(set) var totalEventCount = 0
@@ -34,13 +37,73 @@ public final class ReplayViewModel {
     public private(set) var isLoaded = false
     public private(set) var loadFailure: String?
 
-    public let basePath: String
+    public let session: SessionFilePair
 
     public init(basePath: String) {
-        self.basePath = basePath
+        self.session = SessionFilePair(basePath: basePath)
     }
 
-    public var chartPoints: [ChartPoint] {
+    public func load() async {
+        async let telemetry = Self.loadTelemetry(from: session.systemURL)
+        async let events = Self.loadEvents(from: session.eventsURL)
+        let telemetryResult = await telemetry
+        let eventsResult = await events
+
+        samples = telemetryResult.samples
+        chartPoints = Self.chartPoints(from: telemetryResult.samples)
+        processChartPoints = chartPoints.filter { $0.processRSSGB != nil }
+        sampleDrops = telemetryResult.drops
+        thermalStatesSeen = Set(telemetryResult.samples.map(\.system.thermalState)).sorted()
+
+        milestones = eventsResult.milestones
+        decodeTickCount = eventsResult.decodeTicks
+        totalEventCount = eventsResult.total
+        eventDrops = eventsResult.drops
+
+        loadFailure = telemetryResult.failure ?? eventsResult.failure
+        isLoaded = loadFailure == nil
+    }
+
+    private static func loadTelemetry(
+        from url: URL
+    ) async -> (samples: [SystemSample], drops: Int, failure: String?) {
+        let source = ReplayTelemetrySource(fileURL: url)
+        var samples: [SystemSample] = []
+        for await sample in await source.stream() {
+            samples.append(sample)
+        }
+        return (samples, await source.droppedLines, await source.loadFailure)
+    }
+
+    private static func loadEvents(
+        from url: URL
+    ) async -> (milestones: [Milestone], decodeTicks: Int, total: Int, drops: Int, failure: String?)
+    {
+        let source = ReplayEventSource(fileURL: url)
+        var milestones: [Milestone] = []
+        var ticks = 0
+        var total = 0
+        var firstTs: UInt64?
+        for await envelope in await source.stream() {
+            total += 1
+            if firstTs == nil { firstTs = envelope.ts }
+            // Per-token ticks are kept as a count; the table shows phases.
+            if envelope.kind == .decodeTick {
+                ticks += 1
+                continue
+            }
+            milestones.append(
+                Milestone(
+                    id: milestones.count,
+                    offsetSeconds: Double(envelope.ts &- (firstTs ?? envelope.ts)) / 1e9,
+                    kind: envelope.kind,
+                    requestId: envelope.requestId,
+                    detail: describe(envelope.payload)))
+        }
+        return (milestones, ticks, total, await source.drops.total, await source.loadFailure)
+    }
+
+    private static func chartPoints(from samples: [SystemSample]) -> [ChartPoint] {
         guard let first = samples.first?.system.ts else { return [] }
         return samples.enumerated().map { index, sample in
             ChartPoint(
@@ -52,72 +115,17 @@ public final class ReplayViewModel {
         }
     }
 
-    public var summary: String {
-        guard isLoaded else { return loadFailure ?? "Loading fixture…" }
-        return "\(samples.count) system samples · \(totalEventCount) events "
-            + "(\(decodeTickCount) decode ticks) · dropped \(sampleDrops)+\(eventDrops)"
-    }
-
-    public func load() async {
-        let systemURL = URL(fileURLWithPath: basePath + ".system.ndjson")
-        let eventsURL = URL(fileURLWithPath: basePath + ".ndjson")
-
-        let telemetry = ReplayTelemetrySource(fileURL: systemURL)
-        var collected: [SystemSample] = []
-        for await sample in await telemetry.stream() {
-            collected.append(sample)
-        }
-        samples = collected
-        sampleDrops = await telemetry.droppedLines
-        let telemetryFailure = await telemetry.loadFailure
-
-        let events = ReplayEventSource(fileURL: eventsURL)
-        var rows: [Milestone] = []
-        var ticks = 0
-        var total = 0
-        var firstTs: UInt64?
-        for await envelope in await events.stream() {
-            total += 1
-            if firstTs == nil { firstTs = envelope.ts }
-            // Per-token ticks are kept as a count; the table shows phases.
-            if envelope.kind == .decodeTick {
-                ticks += 1
-                continue
-            }
-            rows.append(
-                Milestone(
-                    id: rows.count,
-                    offsetSeconds: Double(envelope.ts &- (firstTs ?? envelope.ts)) / 1e9,
-                    kind: envelope.kind,
-                    requestId: envelope.requestId,
-                    detail: Self.describe(envelope.payload)))
-        }
-        milestones = rows
-        decodeTickCount = ticks
-        totalEventCount = total
-        eventDrops = await events.drops.total
-        let eventsFailure = await events.loadFailure
-
-        thermalStatesSeen = Set(samples.map(\.system.thermalState)).sorted()
-        loadFailure = telemetryFailure ?? eventsFailure
-        isLoaded = loadFailure == nil
-    }
-
     private static func describe(_ payload: EventPayload) -> String {
         switch payload {
         case .sessionStart(let p):
             return "\(p.adapter) \(p.adapterVersion) · \(p.runtime) · pid \(p.pid)"
         case .clockSync(let p):
             let estimate = p.sample.estimate()
-            let offset = estimate.map { "\($0.offsetNs) ns" } ?? "invalid"
-            return "offset \(offset)"
+            return "offset \(estimate.map { "\($0.offsetNs) ns" } ?? "invalid")"
         case .modelLoadStart(let p):
             return p.modelId
         case .modelLoadEnd(let p):
-            let size =
-                p.weightsBytes.map {
-                    " · \(ByteCountFormatter.string(fromByteCount: Int64(clamping: $0), countStyle: .memory))"
-                } ?? ""
+            let size = p.weightsBytes.map { " · \(formattedBytes($0))" } ?? ""
             return "\(p.modelId) · \(p.ok ? "ok" : "FAILED")\(size)"
         case .requestStart(let p):
             return p.promptTokens.map { "\($0) prompt tokens" } ?? "started"

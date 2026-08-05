@@ -31,6 +31,11 @@ final class CPUDeltaTrackerTests: XCTestCase {
 }
 
 final class ReplaySourceTests: XCTestCase {
+    private static let repoRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+
     private func temporaryFile(lines: [String]) throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("loupe-test-\(UUID().uuidString).ndjson")
@@ -89,11 +94,7 @@ final class ReplaySourceTests: XCTestCase {
     }
 
     func testReplayEventSourceStreamsProtocolExamples() async throws {
-        let repoRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let url = repoRoot.appendingPathComponent("protocol/examples/v1-events.ndjson")
+        let url = Self.repoRoot.appendingPathComponent("protocol/examples/v1-events.ndjson")
 
         let source = ReplayEventSource(fileURL: url)
         var kinds: [EventKind] = []
@@ -107,11 +108,7 @@ final class ReplaySourceTests: XCTestCase {
     }
 
     func testReplayEventSourceDropsMalformedLinesWithCounter() async throws {
-        let repoRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let url = repoRoot.appendingPathComponent("protocol/examples/v1-malformed.ndjson")
+        let url = Self.repoRoot.appendingPathComponent("protocol/examples/v1-malformed.ndjson")
 
         let source = ReplayEventSource(fileURL: url)
         var count = 0

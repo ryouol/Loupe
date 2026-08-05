@@ -5,3 +5,20 @@ import LoupeCore
 public protocol TelemetrySource: Actor {
     func stream() -> AsyncStream<SystemSample>
 }
+
+/// Chooses the telemetry implementation for a given cadence — the daemon's
+/// composition root picks live vs replay here, never inside the XPC plumbing.
+public typealias TelemetrySourceFactory = @Sendable (Duration) -> any TelemetrySource
+
+/// Single owner of sampling cadence policy across app, daemon, and recorder.
+public enum Sampling {
+    public static let defaultIntervalMs = 100
+    public static let minIntervalMs = 10
+    public static let maxIntervalMs = 10_000
+    public static var defaultCadence: Duration { .milliseconds(defaultIntervalMs) }
+    public static var defaultHz: Double { 1_000.0 / Double(defaultIntervalMs) }
+
+    public static func clampedCadence(intervalMs: Int) -> Duration {
+        .milliseconds(max(minIntervalMs, min(intervalMs, maxIntervalMs)))
+    }
+}

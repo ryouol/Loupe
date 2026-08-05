@@ -3,6 +3,8 @@
   "$id": "https://raw.githubusercontent.com/ryouol/Loupe/main/protocol/events.schema.json",
   "title": "Loupe inference event envelope (v1)",
   "description": "One event per NDJSON line. ts is mach_continuous_time nanoseconds on the emitter's clock; the clock_sync handshake maps emitter timestamps onto the daemon's clock. Changing anything here means bumping v, updating fixtures, and updating every adapter in the same commit.",
+  "$comment": "x-limits is normative for decoders: both language implementations assert their constants against it.",
+  "x-limits": { "maxLineBytes": 65536 },
   "type": "object",
   "required": ["v", "ts", "runId", "event", "payload"],
   "additionalProperties": false,

@@ -95,6 +95,14 @@ final class EventCodecTests: XCTestCase {
         XCTAssertEqual(counter.byReason["invalid_envelope"], 2)
     }
 
+    func testLineCapMatchesSchemaLimit() throws {
+        let schemaURL = Self.repoRoot.appendingPathComponent("protocol/events.schema.json")
+        let schema =
+            try JSONSerialization.jsonObject(with: Data(contentsOf: schemaURL)) as? [String: Any]
+        let limits = schema?["x-limits"] as? [String: Any]
+        XCTAssertEqual(limits?["maxLineBytes"] as? Int, EventLineDecoder.maxLineBytes)
+    }
+
     func testOversizedLineIsRejectedBeforeParsing() {
         let decoder = EventLineDecoder()
         let oversized = Data(repeating: UInt8(ascii: "a"), count: EventLineDecoder.maxLineBytes + 1)

@@ -13,7 +13,7 @@ func fail(_ message: String) -> Never {
 var outPath: String?
 var targetPID: Int32?
 var durationSeconds = 60.0
-var hz = 10.0
+var hz = Sampling.defaultHz
 
 var arguments = CommandLine.arguments.dropFirst().makeIterator()
 while let argument = arguments.next() {
@@ -35,8 +35,7 @@ else {
     fail("cannot open \(outPath) for writing")
 }
 
-let encoder = JSONEncoder()
-encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+let encoder = JSONEncoder.deterministic()
 
 let source = UnprivilegedTelemetrySource(
     targetPID: targetPID,

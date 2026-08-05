@@ -8,7 +8,9 @@ struct OverviewView: View {
     let onOpenSession: () -> Void
     let onShowDaemon: () -> Void
 
-    private let host = HostInfo.fingerprint()
+    // Process-constant; read the sysctls once, not per view rebuild.
+    private static let host = HostInfo.fingerprint()
+    private var host: HostFingerprint { Self.host }
 
     var body: some View {
         ScrollView {
@@ -58,7 +60,7 @@ struct OverviewView: View {
         GroupBox {
             VStack(alignment: .leading, spacing: 8) {
                 row("cpu", host.chip)
-                row("memorychip", "\(host.memoryBytes / 1_073_741_824) GB unified memory")
+                row("memorychip", "\(formattedBytes(host.memoryBytes)) unified memory")
                 row(
                     "square.grid.2x2",
                     "\(host.performanceCores) performance + \(host.efficiencyCores) efficiency cores"
@@ -75,12 +77,7 @@ struct OverviewView: View {
     private var statusCard: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(daemonModel.status == .enabled ? Color.green : .orange)
-                        .frame(width: 9, height: 9)
-                    Text(daemonModel.statusLabel)
-                }
+                DaemonStatusIndicator(status: daemonModel.status, label: daemonModel.statusLabel)
                 Text(
                     daemonModel.isObservedMode
                         ? "Observed mode: CPU, memory, swap, and thermal state only. "

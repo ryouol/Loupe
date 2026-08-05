@@ -38,8 +38,20 @@ public struct EventDropCounter: Sendable, Equatable {
     }
 }
 
+extension JSONEncoder {
+    /// The one NDJSON output format: sorted keys keep fixtures and stored
+    /// payloads diffable; raw slashes keep model ids readable.
+    public static func deterministic() -> JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return encoder
+    }
+}
+
 public struct EventLineDecoder: Sendable {
     /// Enforced before parsing: bounds allocations against hostile adapters.
+    /// Shared with the schema (`x-limits.maxLineBytes`) and the Python
+    /// mirror; conformance tests in both languages pin the three together.
     public static let maxLineBytes = 65_536
 
     public init() {}
@@ -105,11 +117,8 @@ public struct EventLineDecoder: Sendable {
 public struct EventLineEncoder: Sendable {
     public init() {}
 
-    /// No trailing newline (the writer owns framing); sorted keys keep
-    /// fixtures diffable.
+    /// No trailing newline — the NDJSON writer owns framing.
     public func encode(_ envelope: EventEnvelope) throws -> Data {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        return try encoder.encode(envelope)
+        try JSONEncoder.deterministic().encode(envelope)
     }
 }

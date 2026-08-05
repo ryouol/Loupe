@@ -26,7 +26,7 @@ struct SessionScreen: View {
         }
         .dropDestination(for: URL.self) { urls, _ in
             guard let url = urls.first else { return false }
-            basePath = RootView.sessionBasePath(from: url)
+            basePath = SessionFilePair(anyFileURL: url).basePath
             return true
         }
     }
@@ -61,7 +61,7 @@ public struct ReplayView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .navigationSubtitle(URL(fileURLWithPath: model.basePath).lastPathComponent)
+        .navigationSubtitle(model.session.name)
         .task { await model.load() }
     }
 
@@ -123,7 +123,7 @@ public struct ReplayView: View {
 
     private var processBand: some View {
         GroupBox {
-            Chart(model.chartPoints.filter { $0.processRSSGB != nil }) { point in
+            Chart(model.processChartPoints) { point in
                 LineMark(
                     x: .value("Time (s)", point.seconds),
                     y: .value("GB", point.processRSSGB ?? 0)

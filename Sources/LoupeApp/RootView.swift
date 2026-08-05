@@ -37,7 +37,8 @@ public struct RootView: View {
     @State private var daemonModel: DaemonViewModel
 
     public init(
-        replayBasePath: String? = ProcessInfo.processInfo.environment["LOUPE_REPLAY_FIXTURE"],
+        replayBasePath: String? = ProcessInfo.processInfo
+            .environment[LoupeEnvironment.replaySessionVariable],
         daemonClient: any DaemonServiceClient = SMAppServiceDaemonClient()
     ) {
         _selection = State(initialValue: replayBasePath == nil ? .overview : .session)
@@ -80,20 +81,7 @@ public struct RootView: View {
     }
 
     private func openSession(at url: URL) {
-        sessionBasePath = Self.sessionBasePath(from: url)
+        sessionBasePath = SessionFilePair(anyFileURL: url).basePath
         selection = .session
-    }
-
-    /// A session is a file pair: `<base>.ndjson` + `<base>.system.ndjson`.
-    /// Either file identifies the session.
-    static func sessionBasePath(from url: URL) -> String {
-        let path = url.path
-        if path.hasSuffix(".system.ndjson") {
-            return String(path.dropLast(".system.ndjson".count))
-        }
-        if path.hasSuffix(".ndjson") {
-            return String(path.dropLast(".ndjson".count))
-        }
-        return path
     }
 }

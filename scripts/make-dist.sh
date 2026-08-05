@@ -14,6 +14,12 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 VERSION=$(sed -n 's/^ *MARKETING_VERSION: *"\(.*\)"/\1/p' project.yml | head -1)
+CODE_VERSION=$(sed -n 's/.*let version = "\(.*\)".*/\1/p' Sources/LoupeCore/Loupe.swift | head -1)
+if [[ "$VERSION" != "$CODE_VERSION" ]]; then
+    echo "version mismatch: project.yml=$VERSION vs Loupe.swift=$CODE_VERSION" >&2
+    echo "bump both before cutting a release." >&2
+    exit 1
+fi
 DMG="dist/Loupe-${VERSION}.dmg"
 IDENTITY="${LOUPE_SIGN_IDENTITY:-}"
 NOTARY_PROFILE="${LOUPE_NOTARY_PROFILE:-}"

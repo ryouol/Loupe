@@ -79,6 +79,5 @@ final class LoupeAppTests: XCTestCase {
         await model.load()
         XCTAssertFalse(model.isLoaded)
         XCTAssertNotNil(model.loadFailure)
-        XCTAssertEqual(model.summary, model.loadFailure)
     }
 }

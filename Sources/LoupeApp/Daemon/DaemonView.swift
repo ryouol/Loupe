@@ -1,6 +1,20 @@
 import LoupeCore
 import SwiftUI
 
+struct DaemonStatusIndicator: View {
+    let status: DaemonStatus
+    let label: String
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Circle()
+                .fill(status == .enabled ? Color.green : .orange)
+                .frame(width: 9, height: 9)
+            Text(label)
+        }
+    }
+}
+
 public struct DaemonView: View {
     @State private var model: DaemonViewModel
 
@@ -25,12 +39,7 @@ public struct DaemonView: View {
 
             Section {
                 LabeledContent("Status") {
-                    HStack(spacing: 7) {
-                        Circle()
-                            .fill(model.status == .enabled ? Color.green : .orange)
-                            .frame(width: 9, height: 9)
-                        Text(model.statusLabel)
-                    }
+                    DaemonStatusIndicator(status: model.status, label: model.statusLabel)
                 }
                 if let error = model.lastActionError {
                     Text(error)
@@ -67,11 +76,9 @@ public struct DaemonView: View {
                         LabeledContent(
                             "Thermal state", value: sample.system.thermalState.rawValue)
                         LabeledContent(
-                            "Memory used",
-                            value: "\(sample.system.memoryUsedBytes / 1_000_000) MB")
+                            "Memory used", value: formattedBytes(sample.system.memoryUsedBytes))
                         LabeledContent(
-                            "Swap used",
-                            value: "\(sample.system.swapUsedBytes / 1_000_000) MB")
+                            "Swap used", value: formattedBytes(sample.system.swapUsedBytes))
                     }
                 }
             }

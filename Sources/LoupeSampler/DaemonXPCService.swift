@@ -15,11 +15,9 @@ struct XPCReceiverBox: @unchecked Sendable {
 actor SampleBroadcaster {
     private var task: Task<Void, Never>?
 
-    func start(intervalMs: Int, box: XPCReceiverBox) {
+    func start(source: any TelemetrySource, box: XPCReceiverBox) {
         stop()
-        let cadence = Duration.milliseconds(max(10, min(intervalMs, 10_000)))
         task = Task {
-            let source = UnprivilegedTelemetrySource(targetPID: nil, cadence: cadence)
             let encoder = JSONEncoder()
             for await sample in await source.stream() {
                 if Task.isCancelled { break }
@@ -43,10 +41,16 @@ public final class DaemonXPCService: NSObject, LoupeDaemonXPCProtocol, Sendable 
     private let broadcaster = SampleBroadcaster()
     private let box: XPCReceiverBox?
     private let daemonVersion: String
+    private let makeSource: TelemetrySourceFactory
 
-    public init(remoteReceiver: (any LoupeSampleReceiverXPCProtocol)?, daemonVersion: String) {
+    public init(
+        remoteReceiver: (any LoupeSampleReceiverXPCProtocol)?,
+        daemonVersion: String,
+        makeSource: @escaping TelemetrySourceFactory
+    ) {
         self.box = remoteReceiver.map(XPCReceiverBox.init)
         self.daemonVersion = daemonVersion
+        self.makeSource = makeSource
     }
 
     public func handshake(reply: @escaping @Sendable (Data) -> Void) {
@@ -59,7 +63,8 @@ public final class DaemonXPCService: NSObject, LoupeDaemonXPCProtocol, Sendable 
 
     public func startSampleStream(intervalMs: Int) {
         guard let box else { return }
-        Task { await broadcaster.start(intervalMs: intervalMs, box: box) }
+        let source = makeSource(Sampling.clampedCadence(intervalMs: intervalMs))
+        Task { await broadcaster.start(source: source, box: box) }
     }
 
     public func stopSampleStream() {
@@ -71,9 +76,16 @@ public final class DaemonXPCService: NSObject, LoupeDaemonXPCProtocol, Sendable 
 /// anonymous listeners (tests).
 public final class DaemonListenerDelegate: NSObject, NSXPCListenerDelegate, Sendable {
     private let daemonVersion: String
+    private let makeSource: TelemetrySourceFactory
 
-    public init(daemonVersion: String) {
+    public init(
+        daemonVersion: String,
+        makeSource: @escaping TelemetrySourceFactory = { cadence in
+            UnprivilegedTelemetrySource(targetPID: nil, cadence: cadence)
+        }
+    ) {
         self.daemonVersion = daemonVersion
+        self.makeSource = makeSource
     }
 
     public func listener(
@@ -87,7 +99,7 @@ public final class DaemonListenerDelegate: NSObject, NSXPCListenerDelegate, Send
             with: LoupeSampleReceiverXPCProtocol.self)
         let receiver = newConnection.remoteObjectProxy as? LoupeSampleReceiverXPCProtocol
         newConnection.exportedObject = DaemonXPCService(
-            remoteReceiver: receiver, daemonVersion: daemonVersion)
+            remoteReceiver: receiver, daemonVersion: daemonVersion, makeSource: makeSource)
         newConnection.resume()
         return true
     }

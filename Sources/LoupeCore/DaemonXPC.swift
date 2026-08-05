@@ -6,9 +6,10 @@ import Foundation
 /// surface stays as thin as possible.
 public enum LoupeDaemon {
     /// Must match both the LaunchDaemon plist filename and its Label key —
-    /// SMAppService refuses anything else.
+    /// SMAppService refuses anything else. A LoupeCoreTests contract test
+    /// pins the committed plist to these constants.
     public static let machServiceName = "ai.squint.loupe.daemon"
-    public static let plistName = "ai.squint.loupe.daemon.plist"
+    public static let plistName = machServiceName + ".plist"
 }
 
 /// First message on every connection; proves protocol compatibility before
