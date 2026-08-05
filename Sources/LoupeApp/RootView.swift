@@ -17,12 +17,15 @@ public struct RootView: View {
         if let replayBasePath {
             ReplayView(basePath: replayBasePath)
         } else {
-            VStack(spacing: 8) {
-                Text("Loupe").font(.largeTitle).bold()
-                Text("v\(Loupe.version)").foregroundStyle(.secondary)
+            VStack(spacing: 16) {
+                VStack(spacing: 4) {
+                    Text("Loupe").font(.largeTitle).bold()
+                    Text("v\(Loupe.version)").foregroundStyle(.secondary)
+                }
+                DaemonDebugView()
             }
-            .padding(40)
-            .frame(minWidth: 480, minHeight: 320)
+            .padding(24)
+            .frame(minWidth: 560, minHeight: 400)
         }
     }
 }

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Label MUST equal this file's name (minus .plist) and the mach
+	     service name — SMAppService.daemon matches on it exactly. -->
+	<key>Label</key>
+	<string>ai.squint.loupe.daemon</string>
+	<key>BundleProgram</key>
+	<string>Contents/MacOS/loupedaemon</string>
+	<key>MachServices</key>
+	<dict>
+		<key>ai.squint.loupe.daemon</key>
+		<true/>
+	</dict>
+	<key>AssociatedBundleIdentifiers</key>
+	<array>
+		<string>ai.squint.loupe</string>
+	</array>
+</dict>
+</plist>

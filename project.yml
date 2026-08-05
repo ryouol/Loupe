@@ -43,6 +43,34 @@ targets:
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
         INFOPLIST_KEY_LSMinimumSystemVersion: "15.0"
         COMBINE_HIDPI_IMAGES: YES
+        # The embed script writes into the bundle and shells out to SPM;
+        # Xcode's script sandbox forbids both.
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+    postCompileScripts:
+      # SMAppService requires the daemon binary at Contents/MacOS/ and its
+      # plist at Contents/Library/LaunchDaemons/, with plist filename ==
+      # Label == mach service name. The daemon is an SPM product, so build
+      # it with SPM and copy it in — least-fragile way to embed one.
+      - name: Embed loupedaemon
+        script: |
+          set -euo pipefail
+          CONFIG=$(printf '%s' "$CONFIGURATION" | tr '[:upper:]' '[:lower:]')
+          cd "$SRCROOT"
+          swift build -c "$CONFIG" --product loupedaemon
+          BIN="$(swift build -c "$CONFIG" --show-bin-path)/loupedaemon"
+          mkdir -p "$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH"
+          cp "$BIN" "$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH/loupedaemon"
+          DAEMONS_DIR="$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Library/LaunchDaemons"
+          mkdir -p "$DAEMONS_DIR"
+          cp "$SRCROOT/Support/ai.squint.loupe.daemon.plist" "$DAEMONS_DIR/"
+          if [ "${CODE_SIGNING_ALLOWED:-NO}" = "YES" ] && [ -n "${EXPANDED_CODE_SIGN_IDENTITY:-}" ]; then
+            codesign --force --options runtime \
+              --sign "$EXPANDED_CODE_SIGN_IDENTITY" \
+              "$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH/loupedaemon"
+          fi
+        outputFiles:
+          - $(TARGET_BUILD_DIR)/$(EXECUTABLE_FOLDER_PATH)/loupedaemon
+          - $(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Library/LaunchDaemons/ai.squint.loupe.daemon.plist
 
 schemes:
   Loupe:
