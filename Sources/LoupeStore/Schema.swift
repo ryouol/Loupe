@@ -1,12 +1,8 @@
 import GRDB
 
-/// Session database schema. One SQLite file per session; every migration is
-/// append-only and re-runnable (GRDB skips applied ones by name).
-///
-/// `ts_ns` columns store `UInt64` continuous-clock nanoseconds as their
-/// `Int64` bit pattern — SQLite integers are signed. Ordering is preserved
-/// for any realistic value (bit patterns diverge only past 2^63 ns ≈ 292
-/// years of uptime).
+/// One SQLite file per session; migrations are append-only.
+/// `ts_ns` columns store UInt64 nanoseconds as Int64 bit patterns (SQLite
+/// integers are signed); ordering diverges only past 2^63 ns ≈ 292 years.
 enum LoupeSchema {
     static var migrator: DatabaseMigrator {
         var migrator = DatabaseMigrator()
@@ -20,8 +16,8 @@ enum LoupeSchema {
                 t.column("spec", .text)
             }
 
-            // System-wide and per-process samples are separate tables for the
-            // same reason they are separate model types: they must not mix.
+            // Separate tables for the same reason they are separate model
+            // types: the two signal families must not mix.
             try db.create(table: "system_samples") { t in
                 t.column("run_id", .text).notNull().references("runs", onDelete: .cascade)
                 t.column("ts_ns", .integer).notNull()

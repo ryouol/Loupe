@@ -3,9 +3,8 @@ import LoupeCore
 import LoupeSampler
 import Observation
 
-/// Loads a fixture pair (`<base>.ndjson` + `<base>.system.ndjson`) through
-/// the same replay sources the daemon path will use — the view model is the
-/// headless, testable half of `make replay`.
+/// Loads a session pair (`<base>.ndjson` + `<base>.system.ndjson`) — the
+/// headless, testable half of the session screen.
 @MainActor
 @Observable
 public final class ReplayViewModel {
@@ -80,8 +79,7 @@ public final class ReplayViewModel {
         for await envelope in await events.stream() {
             total += 1
             if firstTs == nil { firstTs = envelope.ts }
-            // Decode ticks arrive per token; the list only shows phase
-            // boundaries and keeps ticks as a count (charts come in M1.5).
+            // Per-token ticks are kept as a count; the table shows phases.
             if envelope.kind == .decodeTick {
                 ticks += 1
                 continue

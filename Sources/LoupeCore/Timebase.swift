@@ -1,11 +1,8 @@
 import Darwin
 
-/// Converts `mach_continuous_time()` ticks to nanoseconds.
-///
-/// `numer`/`denom` are injectable so conversion is testable on any machine;
-/// production code uses `.live()`. All Loupe timestamps are continuous-clock
-/// nanoseconds — never `Date`, never `mach_absolute_time` (it stops during
-/// sleep, which would silently skew every cross-process correlation).
+/// Converts `mach_continuous_time()` ticks to nanoseconds. Injectable ratio
+/// for tests; never `mach_absolute_time` — it stops during sleep and would
+/// silently skew cross-process correlation.
 public struct Timebase: Sendable, Equatable {
     public let numer: UInt32
     public let denom: UInt32
@@ -22,9 +19,8 @@ public struct Timebase: Sendable, Equatable {
         return Timebase(numer: info.numer, denom: info.denom)
     }
 
-    /// Exact floor(ticks * numer / denom) without the naive `ticks * numer`
-    /// overflow: splitting at the division keeps every intermediate in range
-    /// until uptime exceeds ~590 years on Apple Silicon (numer 125, denom 3).
+    /// Exact floor(ticks·numer/denom); split at the division to avoid the
+    /// naive overflow (safe past ~590 years of uptime on Apple Silicon).
     public func nanoseconds(fromTicks ticks: UInt64) -> UInt64 {
         let n = UInt64(numer)
         let d = UInt64(denom)
@@ -34,8 +30,7 @@ public struct Timebase: Sendable, Equatable {
         return quotient * n + (remainder * n) / d
     }
 
-    /// The single place production code reads the live clock; everything else
-    /// takes tick values as data so tests never depend on real time.
+    /// The one live clock read; everything else takes ticks as data.
     public static func nowContinuousTicks() -> UInt64 {
         mach_continuous_time()
     }
@@ -45,14 +40,12 @@ public struct Timebase: Sendable, Equatable {
     }
 }
 
-/// Result of a clock-offset handshake: how far a remote clock (an adapter's)
-/// sits from ours, in nanoseconds, with an explicit error bound.
+/// Remote-clock offset with its error bound.
 public struct ClockOffsetEstimate: Sendable, Equatable {
-    /// remote − local. Add to a local timestamp to express it on the remote
-    /// clock; subtract from a remote timestamp to map it onto ours.
+    /// remote − local, ns; subtract from remote timestamps to map them here.
     public let offsetNs: Int64
-    /// Half the round trip: the NTP guarantee is |true − offsetNs| ≤ this,
-    /// regardless of how asymmetric the two path delays actually were.
+    /// Half the RTT — the NTP bound |true − offsetNs| ≤ this holds for any
+    /// path asymmetry.
     public let uncertaintyNs: UInt64
 
     public init(offsetNs: Int64, uncertaintyNs: UInt64) {
@@ -61,8 +54,7 @@ public struct ClockOffsetEstimate: Sendable, Equatable {
     }
 }
 
-/// One NTP-style four-timestamp exchange. t0/t3 are on the local clock,
-/// t1/t2 on the remote clock; all are continuous-time nanoseconds.
+/// One NTP-style exchange: t0/t3 local clock, t1/t2 remote clock, all ns.
 public struct ClockSyncSample: Sendable, Equatable {
     public let t0: UInt64
     public let t1: UInt64
@@ -76,12 +68,10 @@ public struct ClockSyncSample: Sendable, Equatable {
         self.t3 = t3
     }
 
-    /// Returns nil instead of trapping on acausal samples (t3 < t0, remote
-    /// receive after send, or negative path time) — handshake peers are
-    /// adapters, i.e. untrusted input.
+    /// nil on acausal samples — handshake peers are untrusted adapters.
     public func estimate() -> ClockOffsetEstimate? {
-        // Two's-complement subtraction stays exact as long as true deltas fit
-        // Int64 — guaranteed for ns-since-boot values (< 2^63 ≈ 292 years).
+        // Two's-complement diffs are exact while true deltas fit Int64
+        // (ns-since-boot < 2^63 ≈ 292 years).
         let localSpan = Int64(bitPattern: t3 &- t0)
         let remoteSpan = Int64(bitPattern: t2 &- t1)
         guard localSpan >= 0, remoteSpan >= 0, localSpan >= remoteSpan else { return nil }
@@ -97,8 +87,7 @@ public struct ClockSyncSample: Sendable, Equatable {
 }
 
 public enum ClockOffsetEstimator {
-    /// The min-RTT sample carries the tightest bound, so a burst of exchanges
-    /// beats any averaging scheme that mixes in congested round trips.
+    /// Min-RTT beats averaging: congested round trips only widen the bound.
     public static func best(of samples: [ClockSyncSample]) -> ClockOffsetEstimate? {
         samples.compactMap { $0.estimate() }.min { $0.uncertaintyNs < $1.uncertaintyNs }
     }

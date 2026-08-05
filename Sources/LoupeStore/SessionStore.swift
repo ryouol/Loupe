@@ -3,8 +3,7 @@ import GRDB
 import LoupeCore
 
 public enum StoreError: Error, Equatable {
-    /// A stored event row failed to decode back through the protocol decoder
-    /// — inserts validate, so this means on-disk corruption, not bad input.
+    /// Inserts validate, so a row failing to decode means on-disk corruption.
     case corruptEventRow(String)
 }
 
@@ -15,8 +14,7 @@ public struct RunRow: Sendable, Equatable {
     public let host: HostFingerprint
 }
 
-/// One session, one SQLite file, one actor. All persistence flows through
-/// the daemon which owns instances of this; the GUI only ever reads.
+/// One session, one SQLite file, one actor.
 public actor SessionStore {
     public nonisolated let runId: String
     public nonisolated let databaseURL: URL
@@ -30,16 +28,14 @@ public actor SessionStore {
         .appendingPathComponent("Loupe/sessions", isDirectory: true)
     }
 
-    /// Opens (creating and migrating as needed) `<directory>/<runId>.sqlite`
-    /// and upserts the run row. Re-opening an existing session is valid.
+    /// Opens or creates `<directory>/<runId>.sqlite` and upserts the run row.
     public init(
         runId: String, directory: URL, startedAtNs: UInt64, host: HostFingerprint
     ) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         self.runId = runId
         self.databaseURL = directory.appendingPathComponent("\(runId).sqlite")
-        // DatabasePool runs SQLite in WAL mode, which is exactly what a
-        // one-writer (daemon) many-readers (GUI queries) split wants.
+        // DatabasePool = WAL: one writer (daemon), many readers (GUI).
         self.pool = try DatabasePool(path: databaseURL.path)
         try LoupeSchema.migrator.migrate(pool)
 
@@ -86,8 +82,8 @@ public actor SessionStore {
 
     // MARK: - Inserts
 
-    /// One transaction, cached statements: this is the path the 100k-row
-    /// benchmark measures, and per-row transactions would blow the budget.
+    /// One transaction + cached statements — per-row transactions would blow
+    /// the 2s/100k-row budget.
     public func append(samples: [SystemSample]) throws {
         let id = runId
         try pool.write { db in
@@ -192,8 +188,7 @@ public actor SessionStore {
         }
     }
 
-    /// Rows rebuild into envelopes through the protocol decoder itself, so a
-    /// stored event that no longer validates surfaces loudly.
+    /// Rows rebuild through the protocol decoder, so corruption surfaces.
     public func events(in range: ClosedRange<UInt64>? = nil) throws -> [EventEnvelope] {
         let id = runId
         let decoder = EventLineDecoder()

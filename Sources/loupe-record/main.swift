@@ -2,9 +2,8 @@ import Foundation
 import LoupeCore
 import LoupeSampler
 
-// Minimal fixture recorder: samples unprivileged telemetry at a fixed cadence
-// and writes SystemSample NDJSON. Deliberately hand-parsed flags — this tool
-// has exactly four and doesn't warrant a dependency.
+// Fixture recorder: unprivileged telemetry to SystemSample NDJSON. Four
+// hand-parsed flags don't warrant an argument-parser dependency.
 
 func fail(_ message: String) -> Never {
     FileHandle.standardError.write(Data((message + "\n").utf8))
@@ -53,8 +52,7 @@ for await sample in await source.stream() {
         written += 1
     }
     if sample.system.ts >= deadline { break }
-    // Following a target process: once it exits, finish cleanly instead of
-    // waiting out the deadline — the file must never end mid-line via kill.
+    // Exit with the observed process so the file never ends mid-line.
     if targetPID != nil {
         consecutiveProcessMisses = sample.process == nil ? consecutiveProcessMisses + 1 : 0
         if consecutiveProcessMisses >= 3 { break }

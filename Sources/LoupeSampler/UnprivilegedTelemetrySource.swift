@@ -2,8 +2,8 @@ import Darwin
 import Foundation
 import LoupeCore
 
-/// CPU% from cumulative rusage counters: only the delta between two reads
-/// over wall time means anything, so the tracker owns the previous reading.
+/// CPU% is a delta between cumulative rusage reads over wall time; the
+/// tracker owns the previous reading.
 public struct CPUDeltaTracker: Sendable {
     private var previous: (cpuNs: UInt64, wallNs: UInt64)?
 
@@ -30,10 +30,8 @@ extension ThermalState {
     }
 }
 
-/// The signals readable without root: thermal state, memory pressure inputs,
-/// swap, and per-PID CPU/RSS. Enough for fixture recording (M0.4); the full
-/// privileged source with IOReport GPU/power channels is M1.1/M1.2 and will
-/// leave those fields nil here forever.
+/// Everything readable without root: thermal, memory, swap, per-PID CPU/RSS.
+/// GPU/power fields stay nil here forever — IOReport lands in M1.2.
 public actor UnprivilegedTelemetrySource: TelemetrySource {
     private let targetPID: Int32?
     private let cadence: Duration
@@ -108,8 +106,7 @@ public actor UnprivilegedTelemetrySource: TelemetrySource {
         return usage.xsu_used
     }
 
-    /// Returns nil when the process is gone — the stream keeps sampling the
-    /// system rather than tearing down mid-session.
+    /// nil when the process is gone; the stream keeps sampling the system.
     private static func processSnapshot(
         pid: Int32, timebase: Timebase, tracker: inout CPUDeltaTracker, nowNs: UInt64
     ) -> ProcessSample? {

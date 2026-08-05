@@ -2,16 +2,14 @@ import Foundation
 import LoupeCore
 
 public enum ReplayPacing: Sendable {
-    /// Yield as fast as the consumer pulls — for tests and bulk loading.
     case immediate
-    /// Sleep out the recorded timestamp gaps — for watching a session live.
+    /// Sleep out the recorded timestamp gaps.
     case realtime
 }
 
 /// Replays a `<name>.system.ndjson` file of `SystemSample` lines.
 public actor ReplayTelemetrySource: TelemetrySource {
-    /// Damaged fixtures could carry absurd gaps; never sleep longer than this
-    /// between samples so realtime replay cannot hang.
+    /// Gap cap so a damaged fixture cannot hang realtime replay.
     private static let maxRealtimeGapNs: UInt64 = 1_000_000_000
 
     private let fileURL: URL

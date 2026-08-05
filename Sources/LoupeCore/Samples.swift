@@ -1,5 +1,4 @@
-/// Thermal pressure, ordered so annotation rules can express "state
-/// increased" without caring about the raw platform values.
+/// Ordered so annotation rules can express "state increased".
 public enum ThermalState: String, Codable, Sendable, CaseIterable, Comparable {
     case nominal
     case fair
@@ -20,18 +19,16 @@ public enum ThermalState: String, Codable, Sendable, CaseIterable, Comparable {
     }
 }
 
-/// Machine-wide signals. Deliberately a different type from `ProcessSample`:
-/// mixing the two families (e.g. comparing package power to one process's
-/// CPU%) produces analysis that looks meaningful and isn't.
+/// Machine-wide signals — a different type from `ProcessSample` because
+/// mixing the two families produces analysis that looks meaningful and isn't.
 public struct SystemWideSample: Codable, Sendable, Equatable {
-    /// Continuous-clock nanoseconds on the sampling machine.
     public let ts: UInt64
     public let thermalState: ThermalState
     public let memoryUsedBytes: UInt64
     public let memoryFreeBytes: UInt64
     public let swapUsedBytes: UInt64
-    /// GPU/power channels come from IOReport (M1.2). nil means "not sampled
-    /// on this machine" — the UI hides those charts instead of drawing zeros.
+    /// nil = not sampled on this machine (IOReport, M1.2); the UI hides the
+    /// chart rather than drawing zeros.
     public let gpuBusyPercent: Double?
     public let gpuPowerMilliwatts: Double?
     public let anePowerMilliwatts: Double?
@@ -64,9 +61,8 @@ public struct SystemWideSample: Codable, Sendable, Equatable {
 public struct ProcessSample: Codable, Sendable, Equatable {
     public let ts: UInt64
     public let pid: Int32
-    /// Delta between two rusage reads over wall time; 100 ≈ one saturated
-    /// core. The first sample of a stream is always 0 — a single cumulative
-    /// reading is meaningless.
+    /// rusage delta over wall time (100 ≈ one core); first sample is 0
+    /// because a single cumulative reading is meaningless.
     public let cpuPercent: Double
     public let rssBytes: UInt64
 
@@ -78,10 +74,9 @@ public struct ProcessSample: Codable, Sendable, Equatable {
     }
 }
 
-/// One row of telemetry: the two families aligned in time but never merged.
+/// One telemetry row: both families aligned in time, never merged.
 public struct SystemSample: Codable, Sendable, Equatable {
     public let system: SystemWideSample
-    /// nil when no process is being observed or the target exited.
     public let process: ProcessSample?
 
     public init(system: SystemWideSample, process: ProcessSample?) {

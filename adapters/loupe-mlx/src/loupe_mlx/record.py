@@ -1,12 +1,7 @@
-"""Fixture recorder: run a real mlx-lm session and write protocol-v1 events.
+"""Fixture recorder: a real mlx-lm session written as protocol-v1 events.
 
-This is deliberately NOT the M1.3 adapter — no socket, no buffering thread,
-just an honest event trace of a real generation loop written straight to a
-file. ``scripts/record-fixture.sh`` pairs it with ``loupe-record`` for the
-system-sample side.
-
-mlx-lm is imported lazily so the package (and CI) never needs it installed;
-install with the ``mlx`` extra to record.
+Not the M1.3 adapter — no socket, no buffering thread. mlx-lm imports lazily
+so CI never needs it; install the ``mlx`` extra to record.
 """
 
 from __future__ import annotations
@@ -21,8 +16,7 @@ from typing import Any, BinaryIO
 from . import events as ev
 from .timebase import now_ns
 
-# Varied lengths on purpose: short and long prefills look different on the
-# timeline, which is the whole point of a baseline fixture.
+# Varied lengths on purpose: prefill variety is the point of a baseline.
 PROMPTS = [
     "Explain the difference between prefill and decode in LLM inference.",
     "Write a haiku about memory bandwidth.",
@@ -106,10 +100,8 @@ def main(argv: list[str] | None = None) -> int:
             if now_ns() >= deadline:
                 break
             request_id = f"q-{index}"
-            # KV growth approximated as active-memory growth over the request
-            # baseline; the M1.3 adapter computes it properly. Good enough for
-            # a fixture whose job is realistic shape, and honestly derived
-            # from the runtime rather than invented.
+            # KV size ≈ active-memory growth over the request baseline —
+            # honestly derived, properly computed later by the M1.3 adapter.
             active_at_start = int(mx.get_active_memory())
             _emit(fh, envelope(ev.RequestStart(), request_id))
             produced = 0

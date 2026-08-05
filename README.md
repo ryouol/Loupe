@@ -18,7 +18,15 @@ macOS 15+ on Apple Silicon, Xcode 16+, and `xcodegen`, `swift-format`, `uv` on
 make bootstrap   # generate the Xcode project, resolve deps, set up the venv
 make build       # swift build + xcodebuild the app
 make test        # swift test + pytest
+make replay      # open the app on the bundled baseline session, no root needed
 ```
 
-Before M0.6, set your Apple Developer Team ID in `Local.xcconfig` (created from
-`Local.xcconfig.template` on bootstrap). It is gitignored — never commit it.
+Set your Apple Developer Team ID in `Local.xcconfig` (created from
+`Local.xcconfig.template` on bootstrap) to sign builds and register the
+privileged daemon. It is gitignored — never commit it.
+
+## Distribution
+
+Loupe ships as a direct-download DMG — no App Store. `make dist` builds it;
+with signing + notarization credentials it produces a Gatekeeper-clean image
+ready to host on any website. See [docs/distribution.md](docs/distribution.md).

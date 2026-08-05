@@ -1,7 +1,7 @@
 import Foundation
 
-/// Why an incoming NDJSON line was dropped. Adapters are untrusted input:
-/// every malformed shape maps to a reason and a counter bump, never a crash.
+/// Adapters are untrusted: every malformed line maps to a reason and a
+/// counter bump, never a crash.
 public enum EventDropReason: Error, Sendable, Equatable {
     case oversizedLine(bytes: Int)
     case malformedJSON
@@ -11,7 +11,7 @@ public enum EventDropReason: Error, Sendable, Equatable {
     case invalidPayload(String)
     case missingRequestID(EventKind)
 
-    /// Stable label shared with the Python mirror; used as a counter key.
+    /// Counter key, shared verbatim with the Python mirror.
     public var label: String {
         switch self {
         case .oversizedLine: return "oversized_line"
@@ -25,8 +25,7 @@ public enum EventDropReason: Error, Sendable, Equatable {
     }
 }
 
-/// Owned by whoever consumes a stream (the daemon's socket actor, a replay
-/// source); the decoder itself stays pure so it can be shared freely.
+/// Caller-owned so the decoder stays pure.
 public struct EventDropCounter: Sendable, Equatable {
     public private(set) var total: Int = 0
     public private(set) var byReason: [String: Int] = [:]
@@ -40,8 +39,7 @@ public struct EventDropCounter: Sendable, Equatable {
 }
 
 public struct EventLineDecoder: Sendable {
-    /// Upper bound on any single line, enforced before parsing so a hostile
-    /// adapter can't make us allocate unbounded memory.
+    /// Enforced before parsing: bounds allocations against hostile adapters.
     public static let maxLineBytes = 65_536
 
     public init() {}
@@ -51,8 +49,7 @@ public struct EventLineDecoder: Sendable {
             return .failure(.oversizedLine(bytes: line.count))
         }
 
-        // Probe v/event first so version and event mismatches report as
-        // themselves instead of as generic payload-decoding noise.
+        // Probe v/event first so their mismatches report as themselves.
         struct Probe: Decodable {
             let v: Int?
             let event: String?
@@ -108,8 +105,8 @@ public struct EventLineDecoder: Sendable {
 public struct EventLineEncoder: Sendable {
     public init() {}
 
-    /// One JSON object, no trailing newline — the NDJSON writer owns framing.
-    /// Sorted keys keep committed fixtures diffable.
+    /// No trailing newline (the writer owns framing); sorted keys keep
+    /// fixtures diffable.
     public func encode(_ envelope: EventEnvelope) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]

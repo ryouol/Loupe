@@ -1,9 +1,8 @@
 import Foundation
 import LoupeCore
 
-/// App-exported receiver: decodes incoming sample Data and feeds a stream.
-/// Safe to mark Sendable — its only state is the continuation, which is
-/// Sendable and thread-safe, and NSXPC may call deliver on any queue.
+/// App-exported receiver. @unchecked is safe: its only state is the
+/// continuation, which is Sendable, and NSXPC calls deliver on any queue.
 final class SampleReceiver: NSObject, LoupeSampleReceiverXPCProtocol, @unchecked Sendable {
     private let continuation: AsyncStream<SystemSample>.Continuation
 
@@ -12,17 +11,14 @@ final class SampleReceiver: NSObject, LoupeSampleReceiverXPCProtocol, @unchecked
     }
 
     func deliver(sampleData: Data) {
-        // The daemon is trusted, but decode defensively anyway: a malformed
-        // sample is dropped, never fatal.
         if let sample = try? JSONDecoder().decode(SystemSample.self, from: sampleData) {
             continuation.yield(sample)
         }
     }
 }
 
-/// Client half of the XPC boundary. Wraps one NSXPCConnection; `samples()`
-/// starts the daemon's stream and yields until the connection dies or the
-/// consumer cancels. NSXPCConnection is documented thread-safe.
+/// Client half of the XPC boundary; NSXPCConnection is documented
+/// thread-safe, hence @unchecked.
 public final class DaemonXPCClient: @unchecked Sendable {
     public enum Endpoint {
         case machService(name: String, privileged: Bool)
@@ -62,17 +58,15 @@ public final class DaemonXPCClient: @unchecked Sendable {
         }
     }
 
-    /// Must be called before `handshake()`/`samples()`; separate from init so
-    /// the receiver can be installed against the not-yet-resumed connection.
+    /// Call before `handshake()`/`startStream()`. Connection lifetime is
+    /// deliberately not tied to the returned stream (callers may handshake
+    /// without consuming samples); end it via `stopAndInvalidate()`.
     public func activate() -> AsyncStream<SystemSample> {
         let (stream, continuation) = AsyncStream.makeStream(of: SystemSample.self)
         connection.exportedObject = SampleReceiver(continuation: continuation)
         connection.interruptionHandler = { continuation.finish() }
         connection.invalidationHandler = { continuation.finish() }
         connection.resume()
-        // Connection lifetime is deliberately NOT tied to the stream: a
-        // caller may handshake without ever consuming samples. Owners end
-        // the connection explicitly via stopAndInvalidate().
         return stream
     }
 

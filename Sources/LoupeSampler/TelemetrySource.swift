@@ -1,8 +1,7 @@
 import LoupeCore
 
-/// The seam that keeps everything testable without root or hardware: the
-/// daemon consumes a `TelemetrySource` and never knows whether samples come
-/// from IOReport or a recorded fixture.
+/// The seam that keeps everything testable without root or hardware: live
+/// and replay implementations are interchangeable.
 public protocol TelemetrySource: Actor {
     func stream() -> AsyncStream<SystemSample>
 }

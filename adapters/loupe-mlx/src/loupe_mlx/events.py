@@ -1,10 +1,7 @@
 """Event protocol v1 — Python mirror of ``protocol/events.schema.json``.
 
-Hand-written to match the Swift types in ``Sources/LoupeCore/Protocol``.
-Drift between the two is caught by tests that round-trip the same committed
-example file in both languages and validate it against the schema. Changing
-the contract means bumping the version, updating fixtures, and updating every
-adapter in the same commit.
+Drift against the Swift types is caught by cross-language round-trip and
+schema-conformance tests over the same committed examples.
 """
 
 from __future__ import annotations
@@ -31,8 +28,7 @@ class DropReason(str, Enum):
 
 
 class EventDropped(Exception):
-    """The one exception ``decode_line`` raises; adapters are untrusted, so
-    every malformed shape becomes a reason + counter bump, never a crash."""
+    """The one exception ``decode_line`` raises: a reason, never a crash."""
 
     def __init__(self, reason: DropReason, detail: str = "") -> None:
         super().__init__(f"{reason.value}: {detail}" if detail else reason.value)
@@ -293,8 +289,7 @@ class Envelope:
 
 
 def encode_line(envelope: Envelope) -> bytes:
-    """One JSON object, no trailing newline — the NDJSON writer owns framing.
-    Sorted keys keep recorded fixtures diffable."""
+    """No trailing newline (the writer owns framing); sorted keys for diffs."""
     obj: dict[str, Any] = {
         "v": envelope.v,
         "ts": envelope.ts,
@@ -308,8 +303,8 @@ def encode_line(envelope: Envelope) -> bytes:
 
 
 def decode_line(raw: bytes | str) -> Envelope:
-    """Mirrors the Swift decoder's classification exactly, including the quirk
-    that a non-integer ``v`` reads as malformed (the Swift probe can't see it)."""
+    """Mirrors the Swift decoder's classification exactly — including the
+    quirk that a non-integer ``v`` reads as malformed."""
     data = raw.encode("utf-8") if isinstance(raw, str) else raw
     if len(data) > MAX_LINE_BYTES:
         raise EventDropped(DropReason.OVERSIZED_LINE, f"{len(data)} bytes")

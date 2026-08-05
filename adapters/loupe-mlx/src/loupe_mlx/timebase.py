@@ -1,9 +1,6 @@
-"""Continuous-clock nanoseconds via ctypes — the exact clock the Swift side
-reads (``mach_continuous_time``), so recorded event timestamps line up with
-system samples without any cross-clock mapping.
-
-``time.monotonic_ns`` is NOT a substitute: CPython backs it with
-``mach_absolute_time``-family clocks that stop during sleep.
+"""``mach_continuous_time`` nanoseconds via ctypes — the same clock the Swift
+side reads. ``time.monotonic_ns`` is not a substitute: CPython backs it with
+clocks that stop during sleep.
 """
 
 from __future__ import annotations

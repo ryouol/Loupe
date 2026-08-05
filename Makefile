@@ -10,7 +10,7 @@ SWIFT_PATHS := Sources Tests Package.swift
 
 .DEFAULT_GOAL := help
 
-.PHONY: help bootstrap bootstrap-mlx generate build build-spm build-app test test-swift test-python lint format replay record-fixture clean
+.PHONY: help bootstrap bootstrap-mlx generate build build-spm build-app test test-swift test-python lint format replay record-fixture dist clean
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -65,6 +65,9 @@ DURATION ?= 60
 record-fixture: ## Record fixtures/$(NAME) from a real MLX run (needs bootstrap-mlx)
 	bash scripts/record-fixture.sh $(NAME) $(DURATION)
 
+dist: ## Build a distributable DMG (see docs/distribution.md for signing)
+	bash scripts/make-dist.sh
+
 clean: ## Remove build artifacts
-	rm -rf .build DerivedData Loupe.xcodeproj $(VENV)
+	rm -rf .build DerivedData Loupe.xcodeproj $(VENV) dist
 	find . -name '__pycache__' -type d -prune -exec rm -rf {} +

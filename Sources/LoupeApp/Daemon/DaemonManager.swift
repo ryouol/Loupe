@@ -11,15 +11,13 @@ public enum DaemonStatus: Sendable, Equatable {
     case unknown(String)
 }
 
-/// The seam that keeps daemon UI testable: the view model talks to this,
-/// production wires SMAppService, tests wire a scripted mock.
+/// Seam for daemon UI tests: production wires SMAppService, tests a mock.
 public protocol DaemonServiceClient: Sendable {
     func status() -> DaemonStatus
     func register() throws
     func unregister() async throws
     func openApprovalSettings()
-    /// nil when the daemon can't be reached (not installed / not approved) —
-    /// callers must treat that as observed mode, never as an error.
+    /// nil = unreachable; callers treat that as observed mode, not an error.
     func makeConnection() -> DaemonXPCClient?
 }
 
@@ -58,8 +56,7 @@ public struct SMAppServiceDaemonClient: DaemonServiceClient {
     }
 }
 
-/// Scripted client for tests and previews: no root, no SMAppService, and by
-/// default it behaves like a user who denied the daemon.
+/// Scripted client for tests and previews.
 public final class MockDaemonClient: DaemonServiceClient, @unchecked Sendable {
     private let lock = NSLock()
     private var currentStatus: DaemonStatus

@@ -68,9 +68,9 @@ final class DaemonViewModelTests: XCTestCase {
         }
     }
 
-    func testDebugViewInstantiatesInEveryState() {
+    func testDaemonViewInstantiatesInEveryState() {
         for status in [DaemonStatus.notRegistered, .requiresApproval, .enabled, .notFound] {
-            _ = DaemonDebugView(model: DaemonViewModel(client: MockDaemonClient(status: status)))
+            _ = DaemonView(model: DaemonViewModel(client: MockDaemonClient(status: status)))
         }
     }
 }

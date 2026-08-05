@@ -1,13 +1,8 @@
 import Foundation
 import LoupeCore
 
-/// Server half of the app ↔ daemon XPC boundary. Lives in LoupeSampler, not
-/// the loupedaemon executable, so tests can drive the real NSXPC machinery
-/// in-process through an anonymous listener — the daemon binary stays thin
-/// wiring, exactly as the layout doc demands.
-///
-/// XPC proxy objects are documented thread-safe but the compiler cannot see
-/// that; this box states the fact once instead of scattering unsafe marks.
+/// XPC proxies are documented thread-safe; the compiler can't see that, so
+/// this box states the fact once.
 struct XPCReceiverBox: @unchecked Sendable {
     let receiver: any LoupeSampleReceiverXPCProtocol
 
@@ -16,8 +11,7 @@ struct XPCReceiverBox: @unchecked Sendable {
     }
 }
 
-/// Owns the streaming task for one connection; all mutable state is actor-
-/// isolated so the NSXPC callback threads never touch it directly.
+/// Streaming state for one connection, isolated from NSXPC callback threads.
 actor SampleBroadcaster {
     private var task: Task<Void, Never>?
 
@@ -42,9 +36,9 @@ actor SampleBroadcaster {
     }
 }
 
-/// Exported object for one accepted connection. Stateless by design: every
-/// call hops into the broadcaster actor, so concurrent XPC callbacks are
-/// safe without locks.
+/// Exported object for one connection; every call hops into the broadcaster
+/// actor, so concurrent XPC callbacks need no locks. Lives here (not in the
+/// daemon binary) so tests can drive real NSXPC in-process.
 public final class DaemonXPCService: NSObject, LoupeDaemonXPCProtocol, Sendable {
     private let broadcaster = SampleBroadcaster()
     private let box: XPCReceiverBox?
@@ -73,8 +67,8 @@ public final class DaemonXPCService: NSObject, LoupeDaemonXPCProtocol, Sendable 
     }
 }
 
-/// Accepts connections and wires the two interfaces. Used by the daemon
-/// against a mach service listener and by tests against an anonymous one.
+/// Accepts connections for both the mach-service listener (daemon) and
+/// anonymous listeners (tests).
 public final class DaemonListenerDelegate: NSObject, NSXPCListenerDelegate, Sendable {
     private let daemonVersion: String
 

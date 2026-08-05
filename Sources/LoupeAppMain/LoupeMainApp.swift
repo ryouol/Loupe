@@ -1,12 +1,20 @@
 import LoupeApp
 import SwiftUI
 
-/// App entry point. Minimal by design — it only wires up `LoupeApp`.
 @main
 struct LoupeMainApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
+        }
+        .defaultSize(width: 1_040, height: 700)
+        .commands {
+            CommandGroup(replacing: .newItem) {
+                Button("Open Session…") {
+                    NotificationCenter.default.post(name: .loupeOpenSession, object: nil)
+                }
+                .keyboardShortcut("o")
+            }
         }
     }
 }

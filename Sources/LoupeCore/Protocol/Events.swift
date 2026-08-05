@@ -1,11 +1,6 @@
-/// Event protocol v1 — the wire contract with every runtime adapter.
-///
-/// These types are hand-written mirrors of `protocol/events.schema.json`
-/// rather than generated: nine fixed events don't justify a codegen step.
-/// Drift is caught by tests that round-trip the same committed example file
-/// in both Swift and Python and validate it against the schema. Changing the
-/// contract means bumping `v`, updating fixtures, and updating every adapter
-/// in the same commit.
+/// Event protocol v1 — hand-written mirror of `protocol/events.schema.json`.
+/// Drift is caught by cross-language round-trip and schema-conformance tests
+/// over the same committed examples.
 public enum EventProtocol {
     public static let version = 1
 }
@@ -21,8 +16,7 @@ public enum EventKind: String, Codable, Sendable, CaseIterable {
     case requestEnd = "request_end"
     case error = "error"
 
-    /// Request-scoped events are meaningless without a requestId; the decoder
-    /// drops them rather than guessing an attribution.
+    /// Request-scoped events drop without a requestId — never guess one.
     public var requiresRequestID: Bool {
         switch self {
         case .requestStart, .prefillEnd, .decodeTick, .requestEnd: return true
@@ -32,8 +26,7 @@ public enum EventKind: String, Codable, Sendable, CaseIterable {
 }
 
 // MARK: - Payloads
-// Counts and byte sizes are unsigned on purpose: a negative value from an
-// adapter is malformed input, and unsigned decoding rejects it for free.
+// Unsigned counts/sizes: negative adapter input fails decoding for free.
 
 public struct SessionStartPayload: Codable, Sendable, Equatable {
     public let adapter: String
@@ -166,8 +159,7 @@ public enum EventPayload: Sendable, Equatable {
 
 public struct EventEnvelope: Sendable, Equatable {
     public let v: Int
-    /// Continuous-clock nanoseconds on the *emitter's* clock; map onto the
-    /// daemon's clock with the offset from the clock_sync handshake.
+    /// Continuous-clock ns on the *emitter's* clock; clock_sync maps it here.
     public let ts: UInt64
     public let runId: String
     public let requestId: String?
@@ -184,10 +176,8 @@ public struct EventEnvelope: Sendable, Equatable {
     }
 }
 
-/// Marker distinguishing payload failures from envelope-field failures —
-/// different bugs on the adapter side, so counters must keep them apart.
-/// JSONDecoder's codingPath is not a reliable signal for this (number-range
-/// errors surface with a truncated path), hence an explicit wrapper.
+/// Separates payload failures from envelope failures; JSONDecoder's
+/// codingPath truncates on number-range errors, so a marker is required.
 struct EventPayloadDecodingFailure: Error {
     let underlying: any Error
 }

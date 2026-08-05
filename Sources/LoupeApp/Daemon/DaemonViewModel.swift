@@ -3,9 +3,8 @@ import LoupeCore
 import LoupeSampler
 import Observation
 
-/// Install/approval state machine plus the live sample readout. The one hard
-/// requirement: a denied or missing daemon degrades to observed mode — it
-/// must never crash or block the app.
+/// Install/approval state machine + live readout. Hard requirement: a denied
+/// or missing daemon degrades to observed mode, never crashes or blocks.
 @MainActor
 @Observable
 public final class DaemonViewModel {
@@ -23,8 +22,6 @@ public final class DaemonViewModel {
         self.status = client.status()
     }
 
-    /// Observed mode: the app still works, reading only what an unprivileged
-    /// process can see; privileged channels need the daemon.
     public var isObservedMode: Bool { status != .enabled }
 
     public var statusLabel: String {
@@ -46,7 +43,6 @@ public final class DaemonViewModel {
         do {
             try client.register()
         } catch {
-            // Denial is a supported path, not a failure mode.
             lastActionError = error.localizedDescription
         }
         refresh()
