@@ -34,8 +34,14 @@ public final class DaemonViewModel {
         }
     }
 
+    /// Also (re)starts streaming when the daemon is reachable: approval can
+    /// happen out-of-app in System Settings, so any status check may be the
+    /// moment the connection first becomes possible.
     public func refresh() {
         status = client.status()
+        if status == .enabled {
+            startStreaming()
+        }
     }
 
     public func install() {
@@ -74,6 +80,9 @@ public final class DaemonViewModel {
                 self.samplesReceived += 1
             }
             connection.stopAndInvalidate()
+            // Stream ended (daemon died or connection dropped): clear so a
+            // later refresh can reconnect instead of being stuck forever.
+            self?.streamTask = nil
         }
     }
 

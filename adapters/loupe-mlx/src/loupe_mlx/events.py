@@ -292,8 +292,10 @@ def encode_line(envelope: Envelope) -> bytes:
 
 
 def decode_line(raw: bytes | str) -> Envelope:
-    """Mirrors the Swift decoder's classification exactly — including the
-    quirk that a non-integer ``v`` reads as malformed."""
+    """Mirrors the Swift decoder's classification for the shared malformed
+    corpus. One known divergence: Python rejects numeric-typed fields given
+    as whole floats (``"v": 1.0``) where Foundation's JSONDecoder coerces
+    them — Python is the stricter side, which only ever drops more."""
     data = raw.encode("utf-8") if isinstance(raw, str) else raw
     if len(data) > MAX_LINE_BYTES:
         raise EventDropped(DropReason.OVERSIZED_LINE, f"{len(data)} bytes")

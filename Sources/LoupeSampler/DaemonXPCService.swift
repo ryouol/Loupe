@@ -34,14 +34,23 @@ actor SampleBroadcaster {
     }
 }
 
-/// Exported object for one connection; every call hops into the broadcaster
-/// actor, so concurrent XPC callbacks need no locks. Lives here (not in the
-/// daemon binary) so tests can drive real NSXPC in-process.
+/// Exported object for one connection. Lives here (not in the daemon
+/// binary) so tests can drive real NSXPC in-process.
+///
+/// Start/stop arrive on XPC's queue in call order, but two fire-and-forget
+/// Tasks could reach the broadcaster reordered — so commands flow through
+/// one AsyncStream consumed by one pump task, preserving XPC's ordering.
 public final class DaemonXPCService: NSObject, LoupeDaemonXPCProtocol, Sendable {
-    private let broadcaster = SampleBroadcaster()
+    private enum Command: Sendable {
+        case start(any TelemetrySource, XPCReceiverBox)
+        case stop
+    }
+
     private let box: XPCReceiverBox?
     private let daemonVersion: String
     private let makeSource: TelemetrySourceFactory
+    private let commands: AsyncStream<Command>.Continuation
+    private let pump: Task<Void, Never>
 
     public init(
         remoteReceiver: (any LoupeSampleReceiverXPCProtocol)?,
@@ -51,6 +60,22 @@ public final class DaemonXPCService: NSObject, LoupeDaemonXPCProtocol, Sendable 
         self.box = remoteReceiver.map(XPCReceiverBox.init)
         self.daemonVersion = daemonVersion
         self.makeSource = makeSource
+        let (stream, continuation) = AsyncStream.makeStream(of: Command.self)
+        self.commands = continuation
+        let broadcaster = SampleBroadcaster()
+        self.pump = Task {
+            for await command in stream {
+                switch command {
+                case .start(let source, let box): await broadcaster.start(source: source, box: box)
+                case .stop: await broadcaster.stop()
+                }
+            }
+            await broadcaster.stop()
+        }
+    }
+
+    deinit {
+        commands.finish()
     }
 
     public func handshake(reply: @escaping @Sendable (Data) -> Void) {
@@ -64,11 +89,16 @@ public final class DaemonXPCService: NSObject, LoupeDaemonXPCProtocol, Sendable 
     public func startSampleStream(intervalMs: Int) {
         guard let box else { return }
         let source = makeSource(Sampling.clampedCadence(intervalMs: intervalMs))
-        Task { await broadcaster.start(source: source, box: box) }
+        commands.yield(.start(source, box))
     }
 
     public func stopSampleStream() {
-        Task { await broadcaster.stop() }
+        commands.yield(.stop)
+    }
+
+    /// Ends streaming and the pump; called when the connection dies.
+    public func shutdown() {
+        commands.finish()
     }
 }
 
@@ -98,8 +128,13 @@ public final class DaemonListenerDelegate: NSObject, NSXPCListenerDelegate, Send
         newConnection.remoteObjectInterface = NSXPCInterface(
             with: LoupeSampleReceiverXPCProtocol.self)
         let receiver = newConnection.remoteObjectProxy as? LoupeSampleReceiverXPCProtocol
-        newConnection.exportedObject = DaemonXPCService(
+        let service = DaemonXPCService(
             remoteReceiver: receiver, daemonVersion: daemonVersion, makeSource: makeSource)
+        newConnection.exportedObject = service
+        // A crashed or force-quit client never sends stopSampleStream; the
+        // daemon must notice on its own or it samples forever as root.
+        newConnection.interruptionHandler = { service.shutdown() }
+        newConnection.invalidationHandler = { service.shutdown() }
         newConnection.resume()
         return true
     }

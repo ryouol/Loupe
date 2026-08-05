@@ -44,4 +44,7 @@ translocated locations (e.g. running the app directly out of the DMG or
 
 ## Versioning
 
-Bump `MARKETING_VERSION` in `project.yml`; the DMG filename follows it.
+Bump **both** `MARKETING_VERSION` in `project.yml` and `Loupe.version` in
+`Sources/LoupeCore/Loupe.swift` (the version the daemon handshake and UI
+report). `make dist` refuses to build when they disagree; the DMG filename
+follows the version.

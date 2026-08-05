@@ -9,7 +9,12 @@ final class MockDaemonClient: DaemonServiceClient, @unchecked Sendable {
     private let lock = NSLock()
     private var currentStatus: DaemonStatus
     private var statusAfterRegister: DaemonStatus
-    var registerError: (any Error)?
+    private var _registerError: (any Error)?
+
+    var registerError: (any Error)? {
+        get { lock.withLock { _registerError } }
+        set { lock.withLock { _registerError = newValue } }
+    }
 
     init(
         status: DaemonStatus = .notRegistered,

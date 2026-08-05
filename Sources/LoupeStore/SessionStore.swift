@@ -14,7 +14,10 @@ public struct RunRow: Sendable, Equatable {
     public let host: HostFingerprint
 }
 
-/// One session, one SQLite file, one actor.
+/// One session, one SQLite file, one actor. Reads and writes run on GRDB's
+/// own queues (async API), never blocking a cooperative-pool thread. The
+/// daemon wires these under `~/Library/Application Support/Loupe/sessions/`
+/// when live persistence lands (M1).
 public actor SessionStore {
     public nonisolated let runId: String
     public nonisolated let databaseURL: URL
@@ -44,18 +47,18 @@ public actor SessionStore {
         }
     }
 
-    public func end(atNs: UInt64) throws {
+    public func end(atNs: UInt64) async throws {
         let id = runId
-        try pool.write { db in
+        try await pool.write { db in
             try db.execute(
                 sql: "UPDATE runs SET ended_at_ns = ? WHERE id = ?",
                 arguments: [Int64(bitPattern: atNs), id])
         }
     }
 
-    public func run() throws -> RunRow? {
+    public func run() async throws -> RunRow? {
         let id = runId
-        return try pool.read { db in
+        return try await pool.read { db in
             guard
                 let row = try Row.fetchOne(
                     db, sql: "SELECT * FROM runs WHERE id = ?", arguments: [id])
@@ -75,9 +78,9 @@ public actor SessionStore {
 
     /// One transaction + cached statements — per-row transactions would blow
     /// the 2s/100k-row budget.
-    public func append(samples: [SystemSample]) throws {
+    public func append(samples: [SystemSample]) async throws {
         let id = runId
-        try pool.write { db in
+        try await pool.write { db in
             let systemStatement = try db.cachedStatement(
                 sql: """
                     INSERT INTO system_samples
@@ -117,8 +120,8 @@ public actor SessionStore {
         }
     }
 
-    public func append(events: [EventEnvelope]) throws {
-        try pool.write { db in
+    public func append(events: [EventEnvelope]) async throws {
+        try await pool.write { db in
             let statement = try db.cachedStatement(
                 sql: """
                     INSERT INTO inference_events (run_id, ts_ns, request_id, event, payload)
@@ -139,9 +142,11 @@ public actor SessionStore {
 
     // MARK: - Queries
 
-    public func systemSamples(in range: ClosedRange<UInt64>? = nil) throws -> [SystemWideSample] {
+    public func systemSamples(
+        in range: ClosedRange<UInt64>? = nil
+    ) async throws -> [SystemWideSample] {
         let id = runId
-        return try pool.read { db in
+        return try await pool.read { db in
             try Row.fetchAll(
                 db,
                 sql:
@@ -162,9 +167,10 @@ public actor SessionStore {
         }
     }
 
-    public func processSamples(in range: ClosedRange<UInt64>? = nil) throws -> [ProcessSample] {
+    public func processSamples(in range: ClosedRange<UInt64>? = nil) async throws -> [ProcessSample]
+    {
         let id = runId
-        return try pool.read { db in
+        return try await pool.read { db in
             try Row.fetchAll(
                 db,
                 sql:
@@ -182,10 +188,10 @@ public actor SessionStore {
 
     /// Kind and payload validate on the way out, so corruption surfaces as a
     /// typed error instead of silently wrong data.
-    public func events(in range: ClosedRange<UInt64>? = nil) throws -> [EventEnvelope] {
+    public func events(in range: ClosedRange<UInt64>? = nil) async throws -> [EventEnvelope] {
         let id = runId
         let decoder = JSONDecoder()
-        return try pool.read { db in
+        return try await pool.read { db in
             try Row.fetchAll(
                 db,
                 sql:
@@ -211,15 +217,15 @@ public actor SessionStore {
         }
     }
 
-    public func journalMode() throws -> String {
-        try pool.read { db in
+    public func journalMode() async throws -> String {
+        try await pool.read { db in
             try String.fetchOne(db, sql: "PRAGMA journal_mode") ?? "unknown"
         }
     }
 
-    public func counts() throws -> (system: Int, process: Int, events: Int) {
+    public func counts() async throws -> (system: Int, process: Int, events: Int) {
         let id = runId
-        return try pool.read { db in
+        return try await pool.read { db in
             func count(_ table: String) throws -> Int {
                 try Int.fetchOne(
                     db, sql: "SELECT COUNT(*) FROM \(table) WHERE run_id = ?", arguments: [id]) ?? 0

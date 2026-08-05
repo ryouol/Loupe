@@ -44,14 +44,16 @@ public final class ReplayViewModel {
     }
 
     public func load() async {
+        // nonisolated static loaders: the parse work genuinely leaves the
+        // main actor, concurrently for the two files.
         async let telemetry = Self.loadTelemetry(from: session.systemURL)
         async let events = Self.loadEvents(from: session.eventsURL)
         let telemetryResult = await telemetry
         let eventsResult = await events
 
         samples = telemetryResult.samples
-        chartPoints = Self.chartPoints(from: telemetryResult.samples)
-        processChartPoints = chartPoints.filter { $0.processRSSGB != nil }
+        chartPoints = telemetryResult.chartPoints
+        processChartPoints = telemetryResult.processChartPoints
         sampleDrops = telemetryResult.drops
         thermalStatesSeen = Set(telemetryResult.samples.map(\.system.thermalState)).sorted()
 
@@ -64,18 +66,25 @@ public final class ReplayViewModel {
         isLoaded = loadFailure == nil
     }
 
-    private static func loadTelemetry(
+    private nonisolated static func loadTelemetry(
         from url: URL
-    ) async -> (samples: [SystemSample], drops: Int, failure: String?) {
+    ) async -> (
+        samples: [SystemSample], chartPoints: [ChartPoint], processChartPoints: [ChartPoint],
+        drops: Int, failure: String?
+    ) {
         let source = ReplayTelemetrySource(fileURL: url)
         var samples: [SystemSample] = []
         for await sample in await source.stream() {
             samples.append(sample)
         }
-        return (samples, await source.droppedLines, await source.loadFailure)
+        let points = chartPoints(from: samples)
+        return (
+            samples, points, points.filter { $0.processRSSGB != nil },
+            await source.droppedLines, await source.loadFailure
+        )
     }
 
-    private static func loadEvents(
+    private nonisolated static func loadEvents(
         from url: URL
     ) async -> (milestones: [Milestone], decodeTicks: Int, total: Int, drops: Int, failure: String?)
     {
@@ -103,7 +112,7 @@ public final class ReplayViewModel {
         return (milestones, ticks, total, await source.drops.total, await source.loadFailure)
     }
 
-    private static func chartPoints(from samples: [SystemSample]) -> [ChartPoint] {
+    private nonisolated static func chartPoints(from samples: [SystemSample]) -> [ChartPoint] {
         guard let first = samples.first?.system.ts else { return [] }
         return samples.enumerated().map { index, sample in
             ChartPoint(
@@ -115,7 +124,7 @@ public final class ReplayViewModel {
         }
     }
 
-    private static func describe(_ payload: EventPayload) -> String {
+    private nonisolated static func describe(_ payload: EventPayload) -> String {
         switch payload {
         case .sessionStart(let p):
             return "\(p.adapter) \(p.adapterVersion) · \(p.runtime) · pid \(p.pid)"
