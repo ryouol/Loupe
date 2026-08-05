@@ -1,0 +1,19 @@
+[project]
+name = "loupe-mlx"
+version = "0.0.1"
+description = "Loupe MLX inference adapter (stub; implemented in M1.3)."
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/loupe_mlx"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

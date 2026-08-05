@@ -1,0 +1,55 @@
+name: Loupe
+
+options:
+  bundleIdPrefix: ai.squint
+  deploymentTarget:
+    macOS: "15.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+
+# Signing lives in Local.xcconfig (gitignored). It is created from
+# Local.xcconfig.template by `make bootstrap`. DEVELOPMENT_TEAM stays empty
+# until M0.6; local/CI builds pass CODE_SIGNING_ALLOWED=NO.
+configFiles:
+  Debug: Local.xcconfig
+  Release: Local.xcconfig
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+
+packages:
+  LoupePackage:
+    path: .
+
+targets:
+  Loupe:
+    type: application
+    platform: macOS
+    sources:
+      - Sources/LoupeAppMain
+    dependencies:
+      - package: LoupePackage
+        product: LoupeApp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.squint.loupe
+        PRODUCT_NAME: Loupe
+        MARKETING_VERSION: "0.0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Loupe
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
+        INFOPLIST_KEY_LSMinimumSystemVersion: "15.0"
+        COMBINE_HIDPI_IMAGES: YES
+
+schemes:
+  Loupe:
+    build:
+      targets:
+        Loupe: all
+    run:
+      config: Debug
+    test:
+      config: Debug

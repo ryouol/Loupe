@@ -1,0 +1,29 @@
+# Generated Xcode project — xcodegen is the only thing that writes it.
+*.xcodeproj
+*.xcworkspace
+
+# Build output
+.build/
+DerivedData/
+build/
+dist/
+*.xcuserstate
+xcuserdata/
+
+# Local, machine-specific config. Never commit Team IDs or model paths.
+Local.xcconfig
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info
+
+# Session databases produced at runtime
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# macOS
+.DS_Store
