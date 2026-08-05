@@ -16,9 +16,18 @@ let package = Package(
         .executable(name: "loupe-record", targets: ["loupe-record"]),
         .executable(name: "loupe-llamacpp", targets: ["loupe-llamacpp"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.5.0")
+    ],
     targets: [
         .target(name: "LoupeCore"),
-        .target(name: "LoupeStore", dependencies: ["LoupeCore"]),
+        .target(
+            name: "LoupeStore",
+            dependencies: [
+                "LoupeCore",
+                .product(name: "GRDB", package: "GRDB.swift"),
+            ]
+        ),
         .target(name: "LoupeSampler", dependencies: ["LoupeCore"]),
         .target(
             name: "LoupeApp",

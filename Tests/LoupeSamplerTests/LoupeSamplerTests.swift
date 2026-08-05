@@ -122,6 +122,19 @@ final class ReplaySourceTests: XCTestCase {
     }
 }
 
+final class HostInfoTests: XCTestCase {
+    func testFingerprintPopulatesOnAppleSilicon() {
+        let fingerprint = HostInfo.fingerprint()
+        XCTAssertFalse(fingerprint.chip.isEmpty)
+        XCTAssertNotEqual(fingerprint.chip, "unknown")
+        XCTAssertGreaterThan(fingerprint.performanceCores, 0)
+        XCTAssertGreaterThan(fingerprint.efficiencyCores, 0)
+        XCTAssertGreaterThan(fingerprint.memoryBytes, 4_000_000_000)
+        XCTAssertNotEqual(fingerprint.osBuild, "unknown")
+        XCTAssertFalse(fingerprint.osVersion.isEmpty)
+    }
+}
+
 final class UnprivilegedTelemetrySourceTests: XCTestCase {
     /// Live smoke test against our own process: no root, no hardware
     /// assumptions, just "the plumbing produces plausible samples".
