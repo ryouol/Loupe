@@ -149,11 +149,11 @@ final class HostInfoTests: XCTestCase {
     }
 }
 
-final class UnprivilegedTelemetrySourceTests: XCTestCase {
+final class LiveTelemetrySourceTests: XCTestCase {
     /// Live smoke test against our own process: no root, no hardware
     /// assumptions, just "the plumbing produces plausible samples".
     func testSamplesOwnProcessWithoutRoot() async {
-        let source = UnprivilegedTelemetrySource(
+        let source = LiveTelemetrySource(
             targetPID: ProcessInfo.processInfo.processIdentifier,
             cadence: .milliseconds(20))
         var samples: [SystemSample] = []
@@ -176,7 +176,7 @@ final class UnprivilegedTelemetrySourceTests: XCTestCase {
 
     func testVanishedProcessYieldsSystemOnlySamples() async {
         // PID beyond the launchd namespace that cannot exist.
-        let source = UnprivilegedTelemetrySource(targetPID: 99_999, cadence: .milliseconds(10))
+        let source = LiveTelemetrySource(targetPID: 99_999, cadence: .milliseconds(10))
         for await sample in await source.stream() {
             XCTAssertNil(sample.process)
             XCTAssertGreaterThan(sample.system.memoryUsedBytes, 0)

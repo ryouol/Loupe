@@ -37,7 +37,7 @@ else {
 
 let encoder = JSONEncoder.deterministic()
 
-let source = UnprivilegedTelemetrySource(
+let source = LiveTelemetrySource(
     targetPID: targetPID,
     cadence: .milliseconds(Int(1000.0 / hz)))
 let deadline = Timebase.live().nowNanoseconds() + UInt64(durationSeconds * 1_000_000_000)

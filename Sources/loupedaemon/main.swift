@@ -7,7 +7,7 @@ import LoupeSampler
 // telemetry choice lives here, at the composition root — M1.x swaps in the
 // privileged IOReport source without touching the XPC plumbing.
 let delegate = DaemonListenerDelegate(daemonVersion: Loupe.version) { cadence in
-    UnprivilegedTelemetrySource(targetPID: nil, cadence: cadence)
+    LiveTelemetrySource(targetPID: nil, cadence: cadence)
 }
 let listener = NSXPCListener(machServiceName: LoupeDaemon.machServiceName)
 listener.delegate = delegate

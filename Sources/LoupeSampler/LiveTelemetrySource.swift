@@ -32,7 +32,7 @@ extension ThermalState {
 
 /// Everything readable without root: thermal, memory, swap, per-PID CPU/RSS.
 /// GPU/power fields stay nil here forever — IOReport lands in M1.2.
-public actor UnprivilegedTelemetrySource: TelemetrySource {
+public actor LiveTelemetrySource: TelemetrySource {
     private let targetPID: Int32?
     private let cadence: Duration
     private let timebase: Timebase
