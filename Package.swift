@@ -11,13 +11,15 @@ let package = Package(
         .library(name: "LoupeCore", targets: ["LoupeCore"]),
         .library(name: "LoupeStore", targets: ["LoupeStore"]),
         .library(name: "LoupeSampler", targets: ["LoupeSampler"]),
+        .library(name: "LoupeBench", targets: ["LoupeBench"]),
         .library(name: "LoupeApp", targets: ["LoupeApp"]),
         .executable(name: "loupedaemon", targets: ["loupedaemon"]),
         .executable(name: "loupe-record", targets: ["loupe-record"]),
         .executable(name: "loupe-llamacpp", targets: ["loupe-llamacpp"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.5.0")
+        .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.5.0"),
+        .package(url: "https://github.com/jpsim/Yams.git", from: "5.1.0"),
     ],
     targets: [
         .target(name: "LoupeCore"),
@@ -29,6 +31,13 @@ let package = Package(
             ]
         ),
         .target(name: "LoupeSampler", dependencies: ["LoupeCore"]),
+        .target(
+            name: "LoupeBench",
+            dependencies: [
+                "LoupeCore",
+                .product(name: "Yams", package: "Yams"),
+            ]
+        ),
         .target(
             name: "LoupeApp",
             dependencies: ["LoupeCore", "LoupeStore", "LoupeSampler"]
@@ -42,11 +51,16 @@ let package = Package(
             dependencies: ["LoupeCore", "LoupeSampler"]
         ),
         .executableTarget(
+            name: "loupe-bench",
+            dependencies: ["LoupeCore", "LoupeBench", "LoupeSampler"]
+        ),
+        .executableTarget(
             name: "loupe-llamacpp",
             dependencies: ["LoupeCore"],
             path: "adapters/loupe-llamacpp"
         ),
         .testTarget(name: "LoupeCoreTests", dependencies: ["LoupeCore"]),
+        .testTarget(name: "LoupeBenchTests", dependencies: ["LoupeBench"]),
         .testTarget(name: "LoupeStoreTests", dependencies: ["LoupeStore"]),
         .testTarget(name: "LoupeSamplerTests", dependencies: ["LoupeSampler"]),
         .testTarget(name: "LoupeAppTests", dependencies: ["LoupeApp"]),

@@ -1,0 +1,14 @@
+# Example Loupe benchmark spec — run with:
+#   make bench SPEC=Support/benchmark-example.yaml OUT=my-report.json
+model: mlx-community/Qwen2.5-0.5B-Instruct-4bit
+runtime: mlx
+quantization: 4bit
+contexts: [128, 512, 1024, 2048]
+batch: 1
+promptCorpus:
+  - "Deterministic filler; the bench builds prompts to exact token counts."
+outputTokens: 64
+repeats: 3
+warmup: 1
+seed: 42
+cooldownTimeoutSeconds: 120
