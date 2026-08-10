@@ -1,7 +1,7 @@
 [project]
 name = "loupe-mlx"
-version = "0.0.1"
-description = "Loupe MLX inference adapter (stub; implemented in M1.3)."
+version = "0.1.0"
+description = "Instruments mlx-lm inference and streams events to the Loupe daemon."
 requires-python = ">=3.11"
 dependencies = []
 

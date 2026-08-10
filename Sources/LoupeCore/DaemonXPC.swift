@@ -10,6 +10,8 @@ public enum LoupeDaemon {
     /// pins the committed plist to these constants.
     public static let machServiceName = "ai.squint.loupe.daemon"
     public static let plistName = machServiceName + ".plist"
+    /// Runtime adapters connect here (mirrored in loupe_mlx/adapter.py).
+    public static let adapterSocketPath = "/var/run/ai.squint.loupe.sock"
 }
 
 /// First message on every connection; proves protocol compatibility before

@@ -1,7 +1,6 @@
-"""Loupe MLX adapter.
+"""Loupe MLX adapter: instrument mlx-lm runs and stream events to the daemon."""
 
-Stub package. The real mlx-lm instrumentation and the Unix-socket event emitter
-land in M1.3.
-"""
+from .adapter import DEFAULT_SOCKET_PATH, LoupeInstrument
 
-__version__ = "0.0.1"
+__version__ = "0.1.0"
+__all__ = ["LoupeInstrument", "DEFAULT_SOCKET_PATH", "__version__"]
