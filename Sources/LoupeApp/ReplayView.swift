@@ -45,6 +45,7 @@ public struct ReplayView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         header
+                        requestTable
                         systemBand
                         // GPU channels are absent on sessions recorded without
                         // the daemon; the band hides instead of charting zeros.
@@ -87,6 +88,36 @@ public struct ReplayView: View {
             StatChip(
                 value: model.thermalStatesSeen.map(\.rawValue).joined(separator: " → "),
                 label: "thermal", symbol: "thermometer.medium")
+        }
+    }
+
+    private var requestTable: some View {
+        GroupBox {
+            Table(model.requestMetrics) {
+                TableColumn("Request") { metrics in
+                    Text(metrics.requestId).monospaced()
+                }
+                .width(70)
+                TableColumn("Prompt") { metrics in
+                    Text("\(metrics.promptTokens)").monospacedDigit()
+                }
+                .width(70)
+                TableColumn("Output") { metrics in
+                    Text("\(metrics.outputTokens)").monospacedDigit()
+                }
+                .width(70)
+                TableColumn("TTFT") { metrics in
+                    Text(String(format: "%.1f ms", metrics.ttftMs)).monospacedDigit()
+                }
+                .width(90)
+                TableColumn("Decode") { metrics in
+                    Text(String(format: "%.1f tok/s", metrics.decodeTokensPerSecond))
+                        .monospacedDigit()
+                }
+            }
+            .frame(minHeight: 120, idealHeight: 160)
+        } label: {
+            Label("Requests — \(model.requestMetrics.count)", systemImage: "list.number")
         }
     }
 

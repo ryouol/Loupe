@@ -40,7 +40,7 @@ let package = Package(
         ),
         .target(
             name: "LoupeApp",
-            dependencies: ["LoupeCore", "LoupeStore", "LoupeSampler"]
+            dependencies: ["LoupeCore", "LoupeStore", "LoupeSampler", "LoupeBench"]
         ),
         .executableTarget(
             name: "loupedaemon",

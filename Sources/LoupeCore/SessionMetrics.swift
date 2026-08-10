@@ -1,6 +1,7 @@
 /// Per-request latency/throughput derived purely from the event stream —
 /// shared by the benchmark harness, the results view, and annotation rules.
-public struct RequestMetrics: Codable, Sendable, Equatable {
+public struct RequestMetrics: Codable, Sendable, Equatable, Identifiable {
+    public var id: String { requestId }
     public let requestId: String
     public let promptTokens: Int
     public let outputTokens: Int

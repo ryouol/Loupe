@@ -34,6 +34,7 @@ public final class ReplayViewModel {
     /// entirely rather than charting zeros.
     public private(set) var gpuChartPoints: [ChartPoint] = []
     public private(set) var milestones: [Milestone] = []
+    public private(set) var requestMetrics: [RequestMetrics] = []
     public private(set) var decodeTickCount = 0
     public private(set) var totalEventCount = 0
     public private(set) var sampleDrops = 0
@@ -66,6 +67,7 @@ public final class ReplayViewModel {
         thermalStatesSeen = Set(telemetryResult.samples.map(\.system.thermalState)).sorted()
 
         milestones = eventsResult.milestones
+        requestMetrics = eventsResult.metrics
         decodeTickCount = eventsResult.decodeTicks
         totalEventCount = eventsResult.total
         eventDrops = eventsResult.drops
@@ -94,15 +96,17 @@ public final class ReplayViewModel {
 
     private nonisolated static func loadEvents(
         from url: URL
-    ) async -> (milestones: [Milestone], decodeTicks: Int, total: Int, drops: Int, failure: String?)
-    {
+    ) async -> (
+        milestones: [Milestone], metrics: [RequestMetrics], decodeTicks: Int, total: Int,
+        drops: Int, failure: String?
+    ) {
         let source = ReplayEventSource(fileURL: url)
         var milestones: [Milestone] = []
+        var envelopes: [EventEnvelope] = []
         var ticks = 0
-        var total = 0
         var firstTs: UInt64?
         for await envelope in await source.stream() {
-            total += 1
+            envelopes.append(envelope)
             if firstTs == nil { firstTs = envelope.ts }
             // Per-token ticks are kept as a count; the table shows phases.
             if envelope.kind == .decodeTick {
@@ -117,7 +121,10 @@ public final class ReplayViewModel {
                     requestId: envelope.requestId,
                     detail: describe(envelope.payload)))
         }
-        return (milestones, ticks, total, await source.drops.total, await source.loadFailure)
+        return (
+            milestones, SessionMetrics.perRequest(events: envelopes), ticks, envelopes.count,
+            await source.drops.total, await source.loadFailure
+        )
     }
 
     private nonisolated static func chartPoints(from samples: [SystemSample]) -> [ChartPoint] {
