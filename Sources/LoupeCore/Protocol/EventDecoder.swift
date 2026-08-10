@@ -48,6 +48,23 @@ extension JSONEncoder {
     }
 }
 
+extension EventLineDecoder {
+    /// Decodes a whole NDJSON blob, counting drops — the shared loop behind
+    /// replay sources, bench-run parsing, and tests. Silent drop-discarding
+    /// is the failure mode this exists to prevent.
+    public func decodeLines(_ blob: Data) -> (envelopes: [EventEnvelope], drops: EventDropCounter) {
+        var envelopes: [EventEnvelope] = []
+        var drops = EventDropCounter()
+        for line in blob.split(separator: UInt8(ascii: "\n")) {
+            switch decode(line: Data(line)) {
+            case .success(let envelope): envelopes.append(envelope)
+            case .failure(let reason): drops.record(reason)
+            }
+        }
+        return (envelopes, drops)
+    }
+}
+
 public struct EventLineDecoder: Sendable {
     /// Enforced before parsing: bounds allocations against hostile adapters.
     /// Shared with the schema (`x-limits.maxLineBytes`) and the Python

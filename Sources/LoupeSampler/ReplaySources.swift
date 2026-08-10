@@ -50,15 +50,8 @@ public actor ReplayEventSource {
             loadFailure = "Cannot read \(fileURL.path)"
             return AsyncStream { $0.finish() }
         }
-        let decoder = EventLineDecoder()
-        var envelopes: [EventEnvelope] = []
-        for line in blob.split(separator: UInt8(ascii: "\n")) {
-            switch decoder.decode(line: Data(line)) {
-            case .success(let envelope): envelopes.append(envelope)
-            case .failure(let reason): drops.record(reason)
-            }
-        }
-        let parsed = envelopes
+        let (parsed, dropped) = EventLineDecoder().decodeLines(blob)
+        drops = dropped
         return AsyncStream { continuation in
             for envelope in parsed {
                 continuation.yield(envelope)

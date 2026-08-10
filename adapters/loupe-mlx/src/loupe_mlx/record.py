@@ -1,19 +1,19 @@
 """Fixture recorder: a real mlx-lm session written as protocol-v1 events.
 
-Not the M1.3 adapter — no socket, no buffering thread. mlx-lm imports lazily
-so CI never needs it; install the ``mlx`` extra to record.
+A thin loop over the same `LoupeInstrument` the live adapter uses, pointed at
+a file sink — recorder events and adapter events cannot drift apart because
+they come from the same code.
 """
 
 from __future__ import annotations
 
 import argparse
 import itertools
-import os
 import sys
 import uuid
-from typing import Any, BinaryIO
 
-from . import events as ev
+from .adapter import LoupeInstrument
+from .socket_writer import FileEventWriter
 from .timebase import now_ns
 
 # Varied lengths on purpose: prefill variety is the point of a baseline.
@@ -44,107 +44,36 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _emit(fh: BinaryIO, envelope: ev.Envelope) -> None:
-    fh.write(ev.encode_line(envelope))
-    fh.write(b"\n")
-    fh.flush()
-
-
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        import mlx.core as mx
-        from mlx_lm import load, stream_generate
+        import mlx_lm  # noqa: F401
     except ImportError:
-        print(
-            "mlx-lm is not installed; run `make bootstrap-mlx` first.",
-            file=sys.stderr,
-        )
+        print("mlx-lm is not installed; run `make bootstrap-mlx` first.", file=sys.stderr)
         return 2
 
-    run_id = args.run_id or f"r-{uuid.uuid4().hex[:8]}"
+    loupe = LoupeInstrument(
+        run_id=args.run_id or f"r-{uuid.uuid4().hex[:8]}",
+        writer=FileEventWriter(args.out),
+    )
+    try:
+        model, tokenizer = loupe.load(args.model)
+    except Exception:
+        loupe.close()
+        return 1
 
-    def envelope(payload: Any, request_id: str | None = None) -> ev.Envelope:
-        return ev.Envelope(ts=now_ns(), run_id=run_id, payload=payload, request_id=request_id)
-
-    with open(args.out, "wb") as fh:
-        _emit(
-            fh,
-            envelope(
-                ev.SessionStart(
-                    adapter="loupe-mlx-recorder",
-                    adapter_version="0.0.1",
-                    runtime="mlx",
-                    pid=os.getpid(),
-                )
-            ),
-        )
-        _emit(fh, envelope(ev.ModelLoadStart(model_id=args.model)))
+    deadline = now_ns() + int(args.duration * 1_000_000_000)
+    for prompt in itertools.cycle(PROMPTS):
+        if now_ns() >= deadline:
+            break
         try:
-            model, tokenizer = load(args.model)
-        except Exception as exc:  # noqa: BLE001 - recorded, not swallowed
-            _emit(fh, envelope(ev.ErrorEvent(code="model_load_failed", message=str(exc)[:4000])))
-            _emit(fh, envelope(ev.ModelLoadEnd(model_id=args.model, ok=False)))
-            return 1
-        _emit(
-            fh,
-            envelope(
-                ev.ModelLoadEnd(
-                    model_id=args.model, ok=True, weights_bytes=int(mx.get_active_memory())
-                )
-            ),
-        )
-
-        deadline = now_ns() + int(args.duration * 1_000_000_000)
-        for index, prompt in enumerate(itertools.cycle(PROMPTS), start=1):
-            if now_ns() >= deadline:
-                break
-            request_id = f"q-{index}"
-            # KV size ≈ active-memory growth over the request baseline —
-            # honestly derived, properly computed later by the M1.3 adapter.
-            active_at_start = int(mx.get_active_memory())
-            _emit(fh, envelope(ev.RequestStart(), request_id))
-            produced = 0
-            finish_reason = "stop"
-            prefill_done = False
-            try:
-                for response in stream_generate(
-                    model, tokenizer, prompt=prompt, max_tokens=args.max_tokens
-                ):
-                    if not prefill_done:
-                        prompt_tokens = int(getattr(response, "prompt_tokens", 0) or 0)
-                        _emit(fh, envelope(ev.PrefillEnd(prompt_tokens=prompt_tokens), request_id))
-                        prefill_done = True
-                    produced += 1
-                    active_now = int(mx.get_active_memory())
-                    _emit(
-                        fh,
-                        envelope(
-                            ev.DecodeTick(
-                                output_tokens=produced,
-                                kv_cache_bytes=max(0, active_now - active_at_start),
-                                active_memory_bytes=active_now,
-                            ),
-                            request_id,
-                        ),
-                    )
-                    finish_reason = getattr(response, "finish_reason", None) or finish_reason
-            except Exception as exc:  # noqa: BLE001 - recorded, not swallowed
-                _emit(
-                    fh,
-                    envelope(
-                        ev.ErrorEvent(code="generation_failed", message=str(exc)[:4000]),
-                        request_id,
-                    ),
-                )
-                finish_reason = "error"
-            _emit(
-                fh,
-                envelope(
-                    ev.RequestEnd(output_tokens=produced, finish_reason=finish_reason),
-                    request_id,
-                ),
-            )
+            for _ in loupe.stream_generate(model, tokenizer, prompt, max_tokens=args.max_tokens):
+                pass
+        except Exception:
+            # The instrument already recorded the error and request_end;
+            # a recorder keeps recording.
+            continue
+    loupe.close()
     return 0
 
 

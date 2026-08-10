@@ -92,8 +92,8 @@ do {
     }
 
     await poller.stop()
-    if let kvUsage = await poller.latest["llamacpp:kv_cache_usage_ratio"] {
-        log("kv cache usage peaked near \(String(format: "%.1f", kvUsage * 100))%")
+    if let kvUsage = await poller.maxima["llamacpp:kv_cache_usage_ratio"] {
+        log("kv cache usage peaked at \(String(format: "%.1f", kvUsage * 100))%")
     }
     log("dropped socket lines: \(writer.dropped)")
     writer.close()

@@ -45,56 +45,16 @@ final class DownsampleTests: XCTestCase {
 }
 
 final class TimelineMergeTests: XCTestCase {
-    private func sample(ts: UInt64) -> SystemSample {
-        SystemSample(
-            system: SystemWideSample(
-                ts: ts, thermalState: .nominal, memoryUsedBytes: 1, memoryFreeBytes: 1,
-                swapUsedBytes: 0),
-            process: nil)
-    }
+    // The known-40ms-offset interleave acceptance lives with the timeline
+    // assembler tests in LoupeAppTests — the offset is verified through the
+    // real render path, not a parallel merge that nothing ships.
 
-    private func event(ts: UInt64, requestId: String? = "q-1") -> EventEnvelope {
-        EventEnvelope(
-            ts: ts, runId: "r-merge", requestId: requestId,
-            payload: .decodeTick(
-                DecodeTickPayload(outputTokens: 1, kvCacheBytes: 1, activeMemoryBytes: 1)))
-    }
-
-    func testKnownFortyMillisecondOffsetInterleavesCorrectly() {
-        // Samples every 100ms on the daemon clock; events on an adapter clock
-        // running 40ms ahead (offset = +40ms), emitted 50ms after each sample
-        // in real time — so they appear at +90ms on the adapter's clock.
+    func testKnownOffsetMapsEventsOntoSampleClock() {
+        // Adapter clock runs 40ms ahead: an event emitted 50ms after a
+        // sample carries ts +90ms and must read back as +50ms unified.
         let offset: Int64 = 40_000_000
-        let samples = (0..<5).map { sample(ts: UInt64($0) * 100_000_000) }
-        let events = (0..<5).map {
-            event(ts: UInt64($0) * 100_000_000 + 50_000_000 + UInt64(offset))
-        }
-
-        let merged = TimelineMerge.merge(
-            samples: samples, events: events, eventClockOffsetNs: offset)
-
-        XCTAssertEqual(merged.count, 10)
-        for (index, item) in merged.enumerated() {
-            if index % 2 == 0 {
-                guard case .sample = item else {
-                    return XCTFail("index \(index) should be a sample")
-                }
-            } else {
-                guard case .event = item else {
-                    return XCTFail("index \(index) should be an event")
-                }
-                // The unified timestamp is the true emission time: +50ms.
-                XCTAssertEqual(item.ts % 100_000_000, 50_000_000)
-            }
-        }
-    }
-
-    func testEqualTimestampsPutSampleBeforeEvent() {
-        let merged = TimelineMerge.merge(
-            samples: [sample(ts: 500)], events: [event(ts: 500)], eventClockOffsetNs: 0)
-        guard case .sample = merged[0], case .event = merged[1] else {
-            return XCTFail("state must come before the transition at equal ts")
-        }
+        XCTAssertEqual(
+            TimelineMerge.shifted(90_000_000, byRemovingOffset: offset), 50_000_000)
     }
 
     func testOffsetFromClockSyncEventsPicksBestEstimate() {

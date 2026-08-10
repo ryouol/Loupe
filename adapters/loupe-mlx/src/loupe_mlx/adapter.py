@@ -38,9 +38,12 @@ class LoupeInstrument:
         socket_path: str = DEFAULT_SOCKET_PATH,
         run_id: str | None = None,
         runtime: str = "mlx",
+        writer: object | None = None,
     ) -> None:
         self.run_id = run_id or f"r-{uuid.uuid4().hex[:8]}"
-        self._writer = SocketEventWriter(socket_path)
+        # One instrumentation loop, pluggable sinks: the live adapter streams
+        # to the daemon socket, the recorder and bench write files.
+        self._writer = writer if writer is not None else SocketEventWriter(socket_path)
         self._request_counter = 0
         self._emit(
             ev.SessionStart(

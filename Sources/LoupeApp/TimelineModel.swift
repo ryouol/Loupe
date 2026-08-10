@@ -60,19 +60,9 @@ enum TimelineGeometry {
         }
     }
 
-    /// Nearest chart point at the scrub position — binary search, O(log n).
+    /// Nearest chart point at the scrub position.
     static func nearestIndex(in seconds: [Double], to target: Double) -> Int? {
-        guard !seconds.isEmpty else { return nil }
-        var low = 0
-        var high = seconds.count - 1
-        while low < high {
-            let mid = (low + high) / 2
-            if seconds[mid] < target { low = mid + 1 } else { high = mid }
-        }
-        if low > 0, abs(seconds[low - 1] - target) < abs(seconds[low] - target) {
-            return low - 1
-        }
-        return low
+        SortedSearch.nearestIndex(seconds, to: target)
     }
 
     static func activeSpan(in spans: [RequestSpan], at seconds: Double) -> RequestSpan? {

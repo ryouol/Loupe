@@ -53,6 +53,9 @@ public final class ReplayViewModel {
     public private(set) var isLoaded = false
     public private(set) var loadFailure: String?
     var requestSpans: [TimelineGeometry.RequestSpan] = []
+    /// Cached x-values for scrub lookups: readout(at:) runs on every drag
+    /// frame and must not re-map 2k points per mouse move.
+    private var chartSeconds: [Double] = []
     /// Shared scrubber position; every lane reads this one value, which is
     /// what keeps them aligned by construction.
     public var scrubSeconds: Double?
@@ -77,6 +80,7 @@ public final class ReplayViewModel {
         sampleDrops = telemetryResult.drops
         eventDrops = eventsResult.drops
         chartPoints = assembled.chartPoints
+        chartSeconds = assembled.chartPoints.map(\.seconds)
         processChartPoints = assembled.processChartPoints
         gpuChartPoints = assembled.gpuChartPoints
         milestones = assembled.milestones
@@ -106,9 +110,7 @@ public final class ReplayViewModel {
     /// Everything the readout shows comes from one scrub position resolved
     /// against one point index — the alignment tests pin this.
     public func readout(at seconds: Double) -> ScrubReadout? {
-        guard
-            let index = TimelineGeometry.nearestIndex(
-                in: chartPoints.map(\.seconds), to: seconds)
+        guard let index = TimelineGeometry.nearestIndex(in: chartSeconds, to: seconds)
         else { return nil }
         let point = chartPoints[index]
         return ScrubReadout(
@@ -168,11 +170,17 @@ public final class ReplayViewModel {
     ) -> Assembled {
         var assembled = Assembled()
 
-        // One zero for every lane: charts, swimlanes, and annotations must
-        // share it or the timeline lies about correlation.
+        // Adapter clocks map onto the sample clock first (min-RTT clock_sync
+        // estimate; 0 for same-machine adapters), then one zero serves every
+        // lane — charts, swimlanes, annotations — or the timeline lies about
+        // correlation.
+        let offset = TimelineMerge.offset(fromClockSyncEvents: envelopes)
+        func unified(_ eventTs: UInt64) -> UInt64 {
+            TimelineMerge.shifted(eventTs, byRemovingOffset: offset)
+        }
         let zeroTs = min(
             samples.first?.system.ts ?? UInt64.max,
-            envelopes.first?.ts ?? UInt64.max)
+            envelopes.first.map { unified($0.ts) } ?? UInt64.max)
         guard zeroTs != UInt64.max else { return assembled }
         func seconds(_ ts: UInt64) -> Double {
             Double(ts &- zeroTs) / 1e9
@@ -203,7 +211,7 @@ public final class ReplayViewModel {
             assembled.milestones.append(
                 Milestone(
                     id: assembled.milestones.count,
-                    offsetSeconds: seconds(envelope.ts),
+                    offsetSeconds: seconds(unified(envelope.ts)),
                     kind: envelope.kind,
                     requestId: envelope.requestId,
                     detail: describe(envelope.payload)))
@@ -212,15 +220,17 @@ public final class ReplayViewModel {
         assembled.metrics = SessionMetrics.perRequest(events: envelopes)
         assembled.spans = TimelineGeometry.requestSpans(
             metrics: assembled.metrics, milestones: assembled.milestones)
-        assembled.annotations = AnnotationEngine.annotate(samples: samples, events: envelopes)
-            .map { annotation in
-                AnnotationRow(
-                    id: annotation.id,
-                    kind: annotation.kind,
-                    atSeconds: seconds(annotation.atNs),
-                    message: annotation.message,
-                    evidence: annotation.evidence)
-            }
+        assembled.annotations = AnnotationEngine.annotate(
+            samples: samples, events: envelopes, metrics: assembled.metrics
+        )
+        .map { annotation in
+            AnnotationRow(
+                id: annotation.id,
+                kind: annotation.kind,
+                atSeconds: seconds(unified(annotation.atNs)),
+                message: annotation.message,
+                evidence: annotation.evidence)
+        }
         assembled.thermalStatesSeen = Set(samples.map(\.system.thermalState)).sorted()
         assembled.durationSeconds = max(
             assembled.chartPoints.last?.seconds ?? 0,

@@ -5,11 +5,7 @@ public enum Downsample {
     public static func lttb<T>(
         _ points: [T], to threshold: Int, x: (T) -> Double, y: (T) -> Double
     ) -> [T] {
-        guard threshold >= 3, points.count > threshold else {
-            return threshold == 2 && points.count > 2
-                ? [points[0], points[points.count - 1]]
-                : points
-        }
+        guard threshold >= 3, points.count > threshold else { return points }
 
         var sampled: [T] = []
         sampled.reserveCapacity(threshold)

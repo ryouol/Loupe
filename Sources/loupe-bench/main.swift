@@ -57,6 +57,7 @@ func runOnce(contextTokens: Int, seed: UInt64, runIndex: Int) throws -> [EventEn
         "--max-tokens", String(spec.outputTokens),
         "--seed", String(seed),
         "--run-id", "r-bench-c\(contextTokens)-\(runIndex)",
+        "--prompt-base", spec.promptCorpus.joined(separator: " "),
     ]
     try process.run()
     process.waitUntilExit()
@@ -66,11 +67,14 @@ func runOnce(contextTokens: Int, seed: UInt64, runIndex: Int) throws -> [EventEn
             userInfo: [NSLocalizedDescriptionKey: "bench run exited nonzero"])
     }
 
-    let decoder = EventLineDecoder()
     let blob = try Data(contentsOf: URL(fileURLWithPath: eventsPath))
-    return blob.split(separator: UInt8(ascii: "\n")).compactMap {
-        try? decoder.decode(line: Data($0)).get()
+    let (envelopes, drops) = EventLineDecoder().decodeLines(blob)
+    if drops.total > 0 {
+        // A bench run that emits undecodable events is a broken run, not a
+        // quieter one.
+        log("warning: \(drops.total) undecodable event lines in run output")
     }
+    return envelopes
 }
 
 do {

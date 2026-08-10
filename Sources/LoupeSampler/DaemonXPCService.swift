@@ -108,14 +108,9 @@ public final class DaemonListenerDelegate: NSObject, NSXPCListenerDelegate, Send
     private let daemonVersion: String
     private let makeSource: TelemetrySourceFactory
 
-    public init(
-        daemonVersion: String,
-        makeSource: @escaping TelemetrySourceFactory = { cadence in
-            LiveTelemetrySource(
-                targetPID: nil, cadence: cadence,
-                makePowerReader: { IOReportPowerReader() })
-        }
-    ) {
+    /// No default source: which telemetry backs the daemon is a composition
+    /// decision that belongs at the composition root, visibly.
+    public init(daemonVersion: String, makeSource: @escaping TelemetrySourceFactory) {
         self.daemonVersion = daemonVersion
         self.makeSource = makeSource
     }

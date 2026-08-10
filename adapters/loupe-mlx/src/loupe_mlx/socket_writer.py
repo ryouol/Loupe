@@ -1,8 +1,10 @@
-"""Non-blocking NDJSON writer: the generation loop must never wait on I/O.
+"""Event sinks for the instrumented generation loop.
 
-Events go into a bounded queue drained by one background thread; when the
-queue is full or the socket is gone the event is dropped and counted. Dropped
-telemetry is recoverable, a stalled decode loop is not.
+`SocketEventWriter` never blocks: events go into a bounded queue drained by
+one background thread, and a full queue or missing daemon becomes a counted
+drop — dropped telemetry is recoverable, a stalled decode loop is not.
+`FileEventWriter` is the recorder/bench sink: same interface, straight to
+NDJSON on disk.
 """
 
 from __future__ import annotations
@@ -14,6 +16,24 @@ import threading
 from .events import Envelope, encode_line
 
 _CLOSE = object()
+
+
+class FileEventWriter:
+    """Synchronous NDJSON-to-file sink; flushed per line so a crashed run
+    still leaves a decodable prefix."""
+
+    def __init__(self, path: str) -> None:
+        self._fh = open(path, "wb")
+        self.dropped = 0
+        self.connected = True
+
+    def emit(self, envelope: Envelope) -> None:
+        self._fh.write(encode_line(envelope) + b"\n")
+        self._fh.flush()
+
+    def close(self, timeout: float = 0.0) -> None:
+        self._fh.close()
+        self.connected = False
 
 
 class SocketEventWriter:

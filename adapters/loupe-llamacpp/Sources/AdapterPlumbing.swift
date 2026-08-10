@@ -67,9 +67,12 @@ public final class UnixSocketLineWriter: @unchecked Sendable {
     }
 }
 
-/// Polls `/metrics` at the spec's 10 Hz, keeping the latest gauge snapshot.
+/// Polls `/metrics` at the spec's 10 Hz, keeping the latest snapshot and the
+/// running maxima — a gauge's peak is gone by the time a request finishes,
+/// so "latest" alone cannot answer "how high did it get".
 public actor MetricsPoller {
     public private(set) var latest: [String: Double] = [:]
+    public private(set) var maxima: [String: Double] = [:]
     private let url: URL
     private var task: Task<Void, Never>?
 
@@ -85,7 +88,7 @@ public actor MetricsPoller {
                 if let (data, _) = try? await URLSession.shared.data(from: url) {
                     let parsed = PrometheusParser.parse(String(decoding: data, as: UTF8.self))
                     if !parsed.isEmpty {
-                        self.latest = parsed
+                        self.record(parsed)
                     }
                 }
                 try? await Task.sleep(for: .milliseconds(intervalMs))
@@ -96,5 +99,12 @@ public actor MetricsPoller {
     public func stop() {
         task?.cancel()
         task = nil
+    }
+
+    private func record(_ parsed: [String: Double]) {
+        latest = parsed
+        for (name, value) in parsed {
+            maxima[name] = max(maxima[name] ?? -.infinity, value)
+        }
     }
 }

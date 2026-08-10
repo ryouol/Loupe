@@ -78,61 +78,46 @@ public struct ResultsView: View {
 
     private var sweepCharts: some View {
         VStack(alignment: .leading, spacing: 16) {
-            GroupBox {
-                Chart(model.sweep) { point in
-                    RuleMark(
-                        x: .value("Context", "\(point.contextTokens)"),
-                        yStart: .value("tok/s", point.decode.p50 - point.decode.stddev),
-                        yEnd: .value("tok/s", point.decode.p50 + point.decode.stddev)
-                    )
-                    .foregroundStyle(.teal.opacity(0.6))
-                    .lineStyle(StrokeStyle(lineWidth: 3, lineCap: .round))
-                    PointMark(
-                        x: .value("Context", "\(point.contextTokens)"),
-                        y: .value("tok/s", point.decode.p50)
-                    )
-                    .foregroundStyle(.teal)
-                    LineMark(
-                        x: .value("Context", "\(point.contextTokens)"),
-                        y: .value("tok/s", point.decode.p50)
-                    )
-                    .foregroundStyle(.teal.opacity(0.4))
-                }
-                .chartYAxisLabel("decode tok/s (p50 ± σ)")
-                .chartXAxisLabel("context tokens")
-                .frame(height: 180)
-                .padding(.top, 4)
-            } label: {
-                Label("Decode Rate vs Context", systemImage: "speedometer")
-            }
+            sweepChart(
+                title: "Decode Rate vs Context", symbol: "speedometer",
+                unit: "decode tok/s (p50 ± σ)", tint: .teal, metric: \.decode)
+            sweepChart(
+                title: "Time to First Token vs Context", symbol: "timer",
+                unit: "TTFT ms (p50 ± σ)", tint: .indigo, metric: \.ttft)
+        }
+    }
 
-            GroupBox {
-                Chart(model.sweep) { point in
-                    RuleMark(
-                        x: .value("Context", "\(point.contextTokens)"),
-                        yStart: .value("ms", point.ttft.p50 - point.ttft.stddev),
-                        yEnd: .value("ms", point.ttft.p50 + point.ttft.stddev)
-                    )
-                    .foregroundStyle(.indigo.opacity(0.6))
-                    .lineStyle(StrokeStyle(lineWidth: 3, lineCap: .round))
-                    PointMark(
-                        x: .value("Context", "\(point.contextTokens)"),
-                        y: .value("ms", point.ttft.p50)
-                    )
-                    .foregroundStyle(.indigo)
-                    LineMark(
-                        x: .value("Context", "\(point.contextTokens)"),
-                        y: .value("ms", point.ttft.p50)
-                    )
-                    .foregroundStyle(.indigo.opacity(0.4))
-                }
-                .chartYAxisLabel("TTFT ms (p50 ± σ)")
-                .chartXAxisLabel("context tokens")
-                .frame(height: 180)
-                .padding(.top, 4)
-            } label: {
-                Label("Time to First Token vs Context", systemImage: "timer")
+    private func sweepChart(
+        title: String, symbol: String, unit: String, tint: Color,
+        metric: KeyPath<ResultsViewModel.SweepPoint, DistributionSummary>
+    ) -> some View {
+        GroupBox {
+            Chart(model.sweep) { point in
+                let summary = point[keyPath: metric]
+                RuleMark(
+                    x: .value("Context", "\(point.contextTokens)"),
+                    yStart: .value("v", summary.p50 - summary.stddev),
+                    yEnd: .value("v", summary.p50 + summary.stddev)
+                )
+                .foregroundStyle(tint.opacity(0.6))
+                .lineStyle(StrokeStyle(lineWidth: 3, lineCap: .round))
+                PointMark(
+                    x: .value("Context", "\(point.contextTokens)"),
+                    y: .value("v", summary.p50)
+                )
+                .foregroundStyle(tint)
+                LineMark(
+                    x: .value("Context", "\(point.contextTokens)"),
+                    y: .value("v", summary.p50)
+                )
+                .foregroundStyle(tint.opacity(0.4))
             }
+            .chartYAxisLabel(unit)
+            .chartXAxisLabel("context tokens")
+            .frame(height: 180)
+            .padding(.top, 4)
+        } label: {
+            Label(title, systemImage: symbol)
         }
     }
 

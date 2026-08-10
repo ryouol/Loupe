@@ -50,7 +50,7 @@ public struct ReplayView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
                         header
-                        readoutBar
+                        ScrubReadoutBar(model: model)
                         swimlaneBand
                         if !model.annotations.isEmpty {
                             annotationList
@@ -100,46 +100,6 @@ public struct ReplayView: View {
         }
     }
 
-    // MARK: - Scrub readout
-
-    private var readoutBar: some View {
-        let readout = model.scrubSeconds.flatMap { model.readout(at: $0) }
-        return HStack(spacing: 16) {
-            Image(systemName: "scope")
-                .foregroundStyle(readout == nil ? .secondary : Color.accentColor)
-            if let readout {
-                Text(String(format: "t = %.2f s", readout.seconds)).monospacedDigit().bold()
-                readoutValue("memory", String(format: "%.2f GB", readout.systemUsedGB))
-                readoutValue("swap", String(format: "%.2f GB", readout.swapUsedGB))
-                if let rss = readout.processRSSGB {
-                    readoutValue("rss", String(format: "%.2f GB", rss))
-                }
-                if let gpu = readout.gpuBusyPercent {
-                    readoutValue("gpu", String(format: "%.0f%%", gpu))
-                }
-                readoutValue("request", readout.activeRequestId ?? "—")
-                Spacer()
-                Button("Clear") { model.scrubSeconds = nil }
-                    .controlSize(.small)
-            } else {
-                Text("Drag across any lane to scrub the timeline")
-                    .foregroundStyle(.secondary)
-                Spacer()
-            }
-        }
-        .font(.callout)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
-    }
-
-    private func readoutValue(_ label: String, _ value: String) -> some View {
-        HStack(spacing: 4) {
-            Text(label).foregroundStyle(.secondary).font(.caption)
-            Text(value).monospacedDigit()
-        }
-    }
-
     // MARK: - Lanes
 
     private var xDomain: ClosedRange<Double> { 0...max(model.durationSeconds, 0.001) }
@@ -168,7 +128,6 @@ public struct ReplayView: View {
                         .foregroundStyle(.red.opacity(0.45))
                         .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [3, 3]))
                 }
-                scrubMark
             }
             .chartForegroundStyleScale(["prefill": Color.orange, "decode": Color.blue])
             .chartYAxis(.hidden)
@@ -176,7 +135,7 @@ public struct ReplayView: View {
             .chartXScale(domain: xDomain)
             .chartLegend(position: .top, alignment: .trailing)
             .frame(height: max(44, CGFloat(28 + (model.requestSpans.map(\.lane).max() ?? 0) * 16)))
-            .chartOverlay { proxy in scrubSurface(proxy) }
+            .chartOverlay { proxy in ScrubOverlay(model: model, proxy: proxy) }
         } label: {
             Label("Inference Phases", systemImage: "waveform.path.ecg")
         }
@@ -247,7 +206,6 @@ public struct ReplayView: View {
                     )
                     .foregroundStyle(by: .value("Series", "Swap used"))
                 }
-                scrubMark
             }
             .chartForegroundStyleScale(["Memory used": Color.blue, "Swap used": Color.orange])
             .chartYAxis(.hidden)
@@ -255,7 +213,7 @@ public struct ReplayView: View {
             .chartXScale(domain: xDomain)
             .chartLegend(position: .top, alignment: .trailing)
             .frame(height: 120)
-            .chartOverlay { proxy in scrubSurface(proxy) }
+            .chartOverlay { proxy in ScrubOverlay(model: model, proxy: proxy) }
         } label: {
             Label("System-Wide — memory & swap", systemImage: "desktopcomputer")
         }
@@ -283,7 +241,6 @@ public struct ReplayView: View {
                         .foregroundStyle(by: .value("Series", "Package W"))
                     }
                 }
-                scrubMark
             }
             .chartForegroundStyleScale(["GPU busy %": Color.green, "Package W": Color.red])
             .chartYAxis(.hidden)
@@ -291,7 +248,7 @@ public struct ReplayView: View {
             .chartXScale(domain: xDomain)
             .chartLegend(position: .top, alignment: .trailing)
             .frame(height: 110)
-            .chartOverlay { proxy in scrubSurface(proxy) }
+            .chartOverlay { proxy in ScrubOverlay(model: model, proxy: proxy) }
         } label: {
             Label("System-Wide — GPU & power", systemImage: "bolt")
         }
@@ -308,47 +265,15 @@ public struct ReplayView: View {
                     )
                     .foregroundStyle(.purple)
                 }
-                scrubMark
             }
             .chartYAxis(.hidden)
             .chartXScale(domain: xDomain)
             .frame(height: 110)
-            .chartOverlay { proxy in scrubSurface(proxy) }
+            .chartOverlay { proxy in ScrubOverlay(model: model, proxy: proxy) }
         } label: {
             Label("Observed Process — RSS", systemImage: "app.badge")
         }
         .backgroundStyle(.purple.opacity(0.06))
-    }
-
-    @ChartContentBuilder
-    private var scrubMark: some ChartContent {
-        if let scrub = model.scrubSeconds {
-            RuleMark(x: .value("scrub", scrub))
-                .foregroundStyle(.primary.opacity(0.6))
-                .lineStyle(StrokeStyle(lineWidth: 1))
-        }
-    }
-
-    /// One gesture surface per lane, all writing the same scrub value — the
-    /// alignment guarantee lives in the shared model, not per-view state.
-    private func scrubSurface(_ proxy: ChartProxy) -> some View {
-        GeometryReader { geo in
-            Rectangle()
-                .fill(.clear)
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { value in
-                            guard let plotAnchor = proxy.plotFrame else { return }
-                            let plot = geo[plotAnchor]
-                            let x = value.location.x - plot.origin.x
-                            if let seconds: Double = proxy.value(atX: x) {
-                                model.scrubSeconds = min(
-                                    max(0, seconds), model.durationSeconds)
-                            }
-                        }
-                )
-        }
     }
 
     // MARK: - Tables
@@ -414,6 +339,91 @@ public struct ReplayView: View {
             Label(
                 "Events — \(model.decodeTickCount) decode ticks collapsed",
                 systemImage: "list.bullet.rectangle")
+        }
+    }
+}
+
+/// The two views that read `scrubSeconds` — and the only two. Everything
+/// else in the timeline is invalidated once per load, so per-frame drags
+/// never rebuild four charts of marks.
+private struct ScrubReadoutBar: View {
+    let model: ReplayViewModel
+
+    var body: some View {
+        let readout = model.scrubSeconds.flatMap { model.readout(at: $0) }
+        HStack(spacing: 16) {
+            Image(systemName: "scope")
+                .foregroundStyle(readout == nil ? .secondary : Color.accentColor)
+            if let readout {
+                Text(String(format: "t = %.2f s", readout.seconds)).monospacedDigit().bold()
+                value("memory", String(format: "%.2f GB", readout.systemUsedGB))
+                value("swap", String(format: "%.2f GB", readout.swapUsedGB))
+                if let rss = readout.processRSSGB {
+                    value("rss", String(format: "%.2f GB", rss))
+                }
+                if let gpu = readout.gpuBusyPercent {
+                    value("gpu", String(format: "%.0f%%", gpu))
+                }
+                value("request", readout.activeRequestId ?? "—")
+                Spacer()
+                Button("Clear") { model.scrubSeconds = nil }
+                    .controlSize(.small)
+            } else {
+                Text("Drag across any lane to scrub the timeline")
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+        }
+        .font(.callout)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func value(_ label: String, _ text: String) -> some View {
+        HStack(spacing: 4) {
+            Text(label).foregroundStyle(.secondary).font(.caption)
+            Text(text).monospacedDigit()
+        }
+    }
+}
+
+/// Cursor + gesture for one lane. Every lane's overlay writes the same
+/// model value, which is what keeps the lanes aligned by construction.
+private struct ScrubOverlay: View {
+    let model: ReplayViewModel
+    let proxy: ChartProxy
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .topLeading) {
+                if let scrub = model.scrubSeconds,
+                    let plotAnchor = proxy.plotFrame,
+                    let x = proxy.position(forX: scrub)
+                {
+                    let plot = geo[plotAnchor]
+                    Path { path in
+                        path.move(to: CGPoint(x: plot.minX + x, y: plot.minY))
+                        path.addLine(to: CGPoint(x: plot.minX + x, y: plot.maxY))
+                    }
+                    .stroke(.primary.opacity(0.6), lineWidth: 1)
+                }
+                Rectangle()
+                    .fill(.clear)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                guard let plotAnchor = proxy.plotFrame else { return }
+                                let plot = geo[plotAnchor]
+                                let x = value.location.x - plot.origin.x
+                                if let seconds: Double = proxy.value(atX: x) {
+                                    model.scrubSeconds = min(
+                                        max(0, seconds), model.durationSeconds)
+                                }
+                            }
+                    )
+            }
         }
     }
 }

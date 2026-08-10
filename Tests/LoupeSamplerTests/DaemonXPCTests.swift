@@ -11,7 +11,11 @@ import XCTest
 final class DaemonXPCTests: XCTestCase {
     private func makeConnectedClient() -> (DaemonXPCClient, NSXPCListener, DaemonListenerDelegate) {
         let listener = NSXPCListener.anonymous()
-        let delegate = DaemonListenerDelegate(daemonVersion: "test-0.0.1")
+        // Composition is explicit now: tests pick the plain live source, the
+        // daemon's main.swift is where IOReport gets added.
+        let delegate = DaemonListenerDelegate(daemonVersion: "test-0.0.1") { cadence in
+            LiveTelemetrySource(targetPID: nil, cadence: cadence)
+        }
         listener.delegate = delegate
         listener.resume()
         let client = DaemonXPCClient(endpoint: .anonymous(listener.endpoint))

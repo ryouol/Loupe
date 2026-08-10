@@ -64,6 +64,25 @@ def test_missing_daemon_degrades_to_counted_drops() -> None:
     assert writer.dropped == 10
 
 
+def test_file_writer_feeds_the_same_instrument() -> None:
+    # The recorder/bench path: LoupeInstrument with a file sink must produce
+    # a decodable stream starting with session_start + clock_sync, without
+    # mlx installed (instrument construction imports nothing heavy).
+    import tempfile
+
+    from loupe_mlx import LoupeInstrument
+    from loupe_mlx.socket_writer import FileEventWriter
+
+    path = tempfile.mktemp(suffix=".ndjson")
+    loupe = LoupeInstrument(run_id="r-file", writer=FileEventWriter(path))
+    loupe.close()
+
+    lines = open(path, "rb").read().splitlines()
+    decoded = [decode_line(line) for line in lines]
+    assert [envelope.event for envelope in decoded] == ["session_start", "clock_sync"]
+    assert all(envelope.run_id == "r-file" for envelope in decoded)
+
+
 def test_emit_never_blocks_even_when_queue_is_full() -> None:
     # No server drains the queue, so it fills; emits past capacity must
     # return immediately as drops rather than stalling the caller.

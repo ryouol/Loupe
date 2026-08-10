@@ -4,7 +4,7 @@ import Foundation
 /// the exact observations that triggered it — an annotation without evidence
 /// is an opinion, and profilers don't ship opinions.
 public struct Annotation: Sendable, Equatable, Identifiable {
-    public enum Kind: String, Sendable, CaseIterable {
+    public enum Kind: String, Sendable {
         case thermalThrottling = "thermal_throttling"
         case memoryPressure = "memory_pressure"
         case prefillQueueing = "prefill_queueing"
@@ -49,14 +49,18 @@ public enum AnnotationEngine {
 
     private static let evidenceCap = 32
 
+    /// Pass precomputed metrics when the caller already has them (the
+    /// session assembler does); nil recomputes from the events.
     public static func annotate(
-        samples: [SystemSample], events: [EventEnvelope], config: Config = Config()
+        samples: [SystemSample], events: [EventEnvelope],
+        metrics: [RequestMetrics]? = nil, config: Config = Config()
     ) -> [Annotation] {
         let ticks = events.filter { $0.kind == .decodeTick }.map(\.ts).sorted()
+        let requestMetrics = metrics ?? SessionMetrics.perRequest(events: events)
         var annotations: [Annotation] = []
         annotations += thermalThrottling(samples: samples, tickTimestamps: ticks, config: config)
         annotations += memoryPressure(samples: samples, tickTimestamps: ticks, config: config)
-        annotations += prefillQueueing(events: events, config: config)
+        annotations += prefillQueueing(events: events, metrics: requestMetrics, config: config)
         annotations += kvDominated(samples: samples, events: events, config: config)
         annotations += gpuUnderutilized(samples: samples, events: events, config: config)
         return annotations.sorted { $0.atNs < $1.atNs }
@@ -148,12 +152,14 @@ public enum AnnotationEngine {
     // MARK: Rule 3 — TTFT > 3x the run median
 
     private static func prefillQueueing(
-        events: [EventEnvelope], config: Config
+        events: [EventEnvelope], metrics: [RequestMetrics], config: Config
     ) -> [Annotation] {
-        let metrics = SessionMetrics.perRequest(events: events)
         guard metrics.count >= 2 else { return [] }
         let sortedTTFTs = metrics.map(\.ttftNs).sorted()
-        let median = Double(sortedTTFTs[sortedTTFTs.count / 2])
+        // Nearest-rank p50 (lower middle on even counts) — the same
+        // convention DistributionSummary uses, so an annotation's "run
+        // median" agrees with the number in the results table.
+        let median = Double(sortedTTFTs[(sortedTTFTs.count + 1) / 2 - 1])
         guard median > 0 else { return [] }
 
         var startTsByRequest: [String: UInt64] = [:]
@@ -238,11 +244,15 @@ public enum AnnotationEngine {
         }
 
         return windows.compactMap { requestId, window in
+            // Binary-search the window bounds — a linear scan over every
+            // sample per request goes quadratic on hour-long sessions.
+            let start = SortedSearch.lowerBound(
+                samples, value: window.start, key: \.system.ts)
+            let end = SortedSearch.lowerBound(samples, value: window.end &+ 1, key: \.system.ts)
+            guard start < end else { return nil }
             // Only samples that actually carry GPU data count: a session
             // without the daemon must not read as "0% busy".
-            let busyReadings = samples.filter {
-                $0.system.ts >= window.start && $0.system.ts <= window.end
-            }.compactMap { sample in
+            let busyReadings = samples[start..<end].compactMap { sample in
                 sample.system.gpuBusyPercent.map { (ts: sample.system.ts, busy: $0) }
             }
             guard busyReadings.count >= 3 else { return nil }
@@ -259,54 +269,38 @@ public enum AnnotationEngine {
                     eventTimestamps: [window.start, window.end],
                     values: ["meanGpuBusyPercent": mean]))
         }
-        .sorted { $0.atNs < $1.atNs }
     }
 
     // MARK: - Shared helpers
 
-    /// Tokens per second in (from, to], nil when the window is empty of time.
+    /// Tokens per second in (from, to], nil when the window is empty of
+    /// time. Counting via bound subtraction — materializing the window just
+    /// to count it allocates on every probe.
     private static func tokenRate(
         in sortedTicks: [UInt64], from: UInt64, to: UInt64
     ) -> Double? {
         guard to > from else { return nil }
-        let count = ticksBetween(sortedTicks, from, to).count
+        let count =
+            SortedSearch.lowerBound(sortedTicks, value: to, key: { $0 })
+            - SortedSearch.lowerBound(sortedTicks, value: from, key: { $0 })
         let seconds = Double(to - from) / 1e9
         return Double(count) / seconds
     }
 
+    /// Materialized only for evidence, once a finding actually fires.
     private static func ticksBetween(
         _ sortedTicks: [UInt64], _ from: UInt64, _ to: UInt64
     ) -> [UInt64] {
-        let lower = lowerBound(sortedTicks, from)
-        let upper = lowerBound(sortedTicks, to)
+        let lower = SortedSearch.lowerBound(sortedTicks, value: from, key: { $0 })
+        let upper = SortedSearch.lowerBound(sortedTicks, value: to, key: { $0 })
         guard lower < upper else { return [] }
         return Array(sortedTicks[lower..<upper])
     }
 
-    private static func lowerBound(_ sorted: [UInt64], _ value: UInt64) -> Int {
-        var low = 0
-        var high = sorted.count
-        while low < high {
-            let mid = (low + high) / 2
-            if sorted[mid] < value { low = mid + 1 } else { high = mid }
-        }
-        return low
-    }
-
     private static func nearestSampleIndex(in samples: [SystemSample], to ts: UInt64) -> Int? {
-        guard !samples.isEmpty else { return nil }
-        var low = 0
-        var high = samples.count - 1
-        while low < high {
-            let mid = (low + high) / 2
-            if samples[mid].system.ts < ts { low = mid + 1 } else { high = mid }
-        }
-        if low > 0,
-            ts &- samples[low - 1].system.ts < samples[low].system.ts &- ts
-        {
-            return low - 1
-        }
-        return low
+        SortedSearch.nearestIndex(
+            samples, to: ts, key: \.system.ts,
+            distance: { $0 >= $1 ? $0 - $1 : $1 - $0 })
     }
 
     private static func cap(_ timestamps: [UInt64]) -> [UInt64] {
@@ -317,9 +311,8 @@ public enum AnnotationEngine {
         Int(((before - after) / before * 100).rounded())
     }
 
+    /// Same formatter convention as every display site (Format.swift).
     private static func formatBytes(_ bytes: UInt64) -> String {
-        bytes >= 1_048_576
-            ? String(format: "%.1f MB", Double(bytes) / 1_048_576)
-            : "\(bytes / 1_024) KB"
+        ByteCountFormatter.string(fromByteCount: Int64(clamping: bytes), countStyle: .memory)
     }
 }
