@@ -52,6 +52,9 @@ public struct ReplayView: View {
                         header
                         readoutBar
                         swimlaneBand
+                        if !model.annotations.isEmpty {
+                            annotationList
+                        }
                         systemBand
                         if !model.gpuChartPoints.isEmpty {
                             gpuBand
@@ -160,6 +163,11 @@ public struct ReplayView: View {
                     )
                     .foregroundStyle(by: .value("Phase", "decode"))
                 }
+                ForEach(model.annotations) { annotation in
+                    RuleMark(x: .value("s", annotation.atSeconds))
+                        .foregroundStyle(.red.opacity(0.45))
+                        .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [3, 3]))
+                }
                 scrubMark
             }
             .chartForegroundStyleScale(["prefill": Color.orange, "decode": Color.blue])
@@ -171,6 +179,46 @@ public struct ReplayView: View {
             .chartOverlay { proxy in scrubSurface(proxy) }
         } label: {
             Label("Inference Phases", systemImage: "waveform.path.ecg")
+        }
+    }
+
+    private var annotationList: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(model.annotations) { annotation in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Image(systemName: symbol(for: annotation.kind))
+                            .foregroundStyle(.red)
+                            .frame(width: 18)
+                        Text(String(format: "%.2f s", annotation.atSeconds))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .frame(width: 70, alignment: .trailing)
+                        Text(annotation.message)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer()
+                        // The link to the moment: jumping scrubs every lane.
+                        Button("Jump") { model.scrubSeconds = annotation.atSeconds }
+                            .controlSize(.small)
+                            .help(
+                                "Evidence: \(annotation.evidence.sampleTimestamps.count) samples, "
+                                    + "\(annotation.evidence.eventTimestamps.count) events")
+                    }
+                }
+            }
+            .padding(4)
+        } label: {
+            Label("Findings — \(model.annotations.count)", systemImage: "exclamationmark.bubble")
+        }
+    }
+
+    private func symbol(for kind: Annotation.Kind) -> String {
+        switch kind {
+        case .thermalThrottling: return "thermometer.high"
+        case .memoryPressure: return "memorychip"
+        case .prefillQueueing: return "hourglass"
+        case .kvDominatedFootprint: return "square.stack.3d.up.fill"
+        case .gpuUnderutilized: return "bolt.slash"
         }
     }
 

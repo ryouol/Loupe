@@ -80,9 +80,28 @@ final class TimelineAlignmentTests: XCTestCase {
         let model = await loadedModel()
         XCTAssertLessThanOrEqual(model.chartPoints.count, 2_000)
         XCTAssertFalse(model.chartPoints.isEmpty)
-        // Endpoints survive downsampling.
-        XCTAssertEqual(model.chartPoints.first?.seconds, 0)
-        XCTAssertEqual(model.chartPoints.last?.seconds ?? 0, model.durationSeconds)
+        // Endpoints survive downsampling, and no lane extends past duration.
+        XCTAssertLessThanOrEqual(
+            model.chartPoints.last?.seconds ?? 0, model.durationSeconds + 0.0001)
+    }
+
+    /// Charts, swimlanes, and annotations must share one time zero — two
+    /// different zeros on one axis was an actual bug this pins against.
+    func testEveryLaneSharesOneTimeZero() async {
+        let model = await loadedModel()
+        let firstChart = model.chartPoints.first?.seconds ?? .infinity
+        let firstMilestone = model.milestones.first?.offsetSeconds ?? .infinity
+        XCTAssertEqual(min(firstChart, firstMilestone), 0, accuracy: 0.000001)
+        XCTAssertGreaterThanOrEqual(firstChart, 0)
+        XCTAssertGreaterThanOrEqual(firstMilestone, 0)
+        for span in model.requestSpans {
+            XCTAssertGreaterThanOrEqual(span.startSeconds, 0)
+            XCTAssertLessThanOrEqual(span.endSeconds, model.durationSeconds + 0.0001)
+        }
+        for annotation in model.annotations {
+            XCTAssertGreaterThanOrEqual(annotation.atSeconds, 0)
+            XCTAssertLessThanOrEqual(annotation.atSeconds, model.durationSeconds + 0.0001)
+        }
     }
 
     func testTimelineRendersAtThreeWindowWidths() async {
