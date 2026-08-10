@@ -23,11 +23,16 @@ public final class ReplayViewModel {
         public let systemUsedGB: Double
         public let swapUsedGB: Double
         public let processRSSGB: Double?
+        public let gpuBusyPercent: Double?
+        public let packagePowerWatts: Double?
     }
 
     public private(set) var samples: [SystemSample] = []
     public private(set) var chartPoints: [ChartPoint] = []
     public private(set) var processChartPoints: [ChartPoint] = []
+    /// Empty when the session carries no GPU channels — the band hides
+    /// entirely rather than charting zeros.
+    public private(set) var gpuChartPoints: [ChartPoint] = []
     public private(set) var milestones: [Milestone] = []
     public private(set) var decodeTickCount = 0
     public private(set) var totalEventCount = 0
@@ -54,6 +59,9 @@ public final class ReplayViewModel {
         samples = telemetryResult.samples
         chartPoints = telemetryResult.chartPoints
         processChartPoints = telemetryResult.processChartPoints
+        gpuChartPoints = chartPoints.filter {
+            $0.gpuBusyPercent != nil || $0.packagePowerWatts != nil
+        }
         sampleDrops = telemetryResult.drops
         thermalStatesSeen = Set(telemetryResult.samples.map(\.system.thermalState)).sorted()
 
@@ -120,7 +128,9 @@ public final class ReplayViewModel {
                 seconds: Double(sample.system.ts &- first) / 1e9,
                 systemUsedGB: Double(sample.system.memoryUsedBytes) / 1e9,
                 swapUsedGB: Double(sample.system.swapUsedBytes) / 1e9,
-                processRSSGB: sample.process.map { Double($0.rssBytes) / 1e9 })
+                processRSSGB: sample.process.map { Double($0.rssBytes) / 1e9 },
+                gpuBusyPercent: sample.system.gpuBusyPercent,
+                packagePowerWatts: sample.system.packagePowerMilliwatts.map { $0 / 1_000 })
         }
     }
 

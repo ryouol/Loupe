@@ -111,7 +111,9 @@ public final class DaemonListenerDelegate: NSObject, NSXPCListenerDelegate, Send
     public init(
         daemonVersion: String,
         makeSource: @escaping TelemetrySourceFactory = { cadence in
-            LiveTelemetrySource(targetPID: nil, cadence: cadence)
+            LiveTelemetrySource(
+                targetPID: nil, cadence: cadence,
+                makePowerReader: { IOReportPowerReader() })
         }
     ) {
         self.daemonVersion = daemonVersion

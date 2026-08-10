@@ -39,7 +39,8 @@ let encoder = JSONEncoder.deterministic()
 
 let source = LiveTelemetrySource(
     targetPID: targetPID,
-    cadence: .milliseconds(Int(1000.0 / hz)))
+    cadence: .milliseconds(Int(1000.0 / hz)),
+    makePowerReader: { IOReportPowerReader() })
 let deadline = Timebase.live().nowNanoseconds() + UInt64(durationSeconds * 1_000_000_000)
 var written = 0
 var consecutiveProcessMisses = 0

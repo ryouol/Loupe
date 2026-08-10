@@ -46,6 +46,11 @@ public struct ReplayView: View {
                     VStack(alignment: .leading, spacing: 16) {
                         header
                         systemBand
+                        // GPU channels are absent on sessions recorded without
+                        // the daemon; the band hides instead of charting zeros.
+                        if !model.gpuChartPoints.isEmpty {
+                            gpuBand
+                        }
                         processBand
                         eventTable
                     }
@@ -118,6 +123,36 @@ public struct ReplayView: View {
             .padding(.top, 4)
         } label: {
             Label("System-Wide", systemImage: "desktopcomputer")
+        }
+    }
+
+    private var gpuBand: some View {
+        GroupBox {
+            Chart(model.gpuChartPoints) { point in
+                if let busy = point.gpuBusyPercent {
+                    LineMark(
+                        x: .value("Time (s)", point.seconds),
+                        y: .value("%", busy),
+                        series: .value("Series", "GPU busy")
+                    )
+                    .foregroundStyle(by: .value("Series", "GPU busy"))
+                }
+                if let watts = point.packagePowerWatts {
+                    LineMark(
+                        x: .value("Time (s)", point.seconds),
+                        y: .value("%", watts),
+                        series: .value("Series", "Package W")
+                    )
+                    .foregroundStyle(by: .value("Series", "Package W"))
+                }
+            }
+            .chartForegroundStyleScale(["GPU busy": Color.green, "Package W": Color.red])
+            .chartXAxisLabel("seconds")
+            .chartYAxisLabel("% / W")
+            .frame(height: 130)
+            .padding(.top, 4)
+        } label: {
+            Label("GPU & Power", systemImage: "bolt")
         }
     }
 

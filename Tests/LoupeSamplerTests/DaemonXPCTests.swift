@@ -54,8 +54,13 @@ final class DaemonXPCTests: XCTestCase {
         XCTAssertEqual(timestamps, timestamps.sorted())
         for sample in received {
             XCTAssertGreaterThan(sample.system.memoryUsedBytes, 0)
-            XCTAssertNil(sample.system.gpuBusyPercent, "GPU stays nil until M1.2")
-            XCTAssertNil(sample.process, "daemon streams system-wide only in M0.6")
+            // GPU fields flow when IOReport resolves in this context and stay
+            // nil when it doesn't — both are correct; zeros never are.
+            if let busy = sample.system.gpuBusyPercent {
+                XCTAssertGreaterThanOrEqual(busy, 0)
+                XCTAssertLessThanOrEqual(busy, 100)
+            }
+            XCTAssertNil(sample.process, "the daemon streams system-wide samples only")
         }
     }
 

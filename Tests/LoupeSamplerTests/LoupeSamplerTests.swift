@@ -167,7 +167,9 @@ final class LiveTelemetrySourceTests: XCTestCase {
         XCTAssertEqual(timestamps, timestamps.sorted(), "timestamps must be monotonic")
         for sample in samples {
             XCTAssertGreaterThan(sample.system.memoryUsedBytes, 0)
-            XCTAssertNil(sample.system.gpuBusyPercent, "GPU channels are nil until M1.2")
+            XCTAssertNil(
+                sample.system.gpuBusyPercent,
+                "no power reader was injected, so GPU fields must stay nil")
             let process = try? XCTUnwrap(sample.process)
             XCTAssertEqual(process?.pid, ProcessInfo.processInfo.processIdentifier)
             XCTAssertGreaterThan(process?.rssBytes ?? 0, 0)

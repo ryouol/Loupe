@@ -79,6 +79,13 @@ public struct DaemonView: View {
                             "Memory used", value: formattedBytes(sample.system.memoryUsedBytes))
                         LabeledContent(
                             "Swap used", value: formattedBytes(sample.system.swapUsedBytes))
+                        if let busy = sample.system.gpuBusyPercent {
+                            LabeledContent("GPU busy", value: String(format: "%.0f%%", busy))
+                        }
+                        if let power = sample.system.packagePowerMilliwatts {
+                            LabeledContent(
+                                "Package power", value: String(format: "%.1f W", power / 1_000))
+                        }
                     }
                 }
             }

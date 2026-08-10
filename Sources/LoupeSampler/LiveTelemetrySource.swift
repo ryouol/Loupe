@@ -36,27 +36,37 @@ public actor LiveTelemetrySource: TelemetrySource {
     private let targetPID: Int32?
     private let cadence: Duration
     private let timebase: Timebase
+    private let makePowerReader: @Sendable () -> (any PowerChannelReading)?
 
+    /// The power reader is a factory because the reader itself is stateful
+    /// and non-Sendable — it is created and lives entirely inside the
+    /// sampling task.
     public init(
         targetPID: Int32?,
         cadence: Duration = Sampling.defaultCadence,
-        timebase: Timebase = .live()
+        timebase: Timebase = .live(),
+        makePowerReader: @escaping @Sendable () -> (any PowerChannelReading)? = { nil }
     ) {
         self.targetPID = targetPID
         self.cadence = cadence
         self.timebase = timebase
+        self.makePowerReader = makePowerReader
     }
 
     public func stream() -> AsyncStream<SystemSample> {
         let pid = targetPID
         let cadence = cadence
         let timebase = timebase
+        let makePowerReader = makePowerReader
         return AsyncStream { continuation in
             let task = Task {
                 var tracker = CPUDeltaTracker()
+                let powerReader = makePowerReader()
                 while !Task.isCancelled {
+                    let power = powerReader?.sample() ?? PowerReading()
                     continuation.yield(
-                        Self.takeSample(pid: pid, timebase: timebase, tracker: &tracker))
+                        Self.takeSample(
+                            pid: pid, timebase: timebase, tracker: &tracker, power: power))
                     try? await Task.sleep(for: cadence)
                 }
                 continuation.finish()
@@ -66,7 +76,8 @@ public actor LiveTelemetrySource: TelemetrySource {
     }
 
     static func takeSample(
-        pid: Int32?, timebase: Timebase, tracker: inout CPUDeltaTracker
+        pid: Int32?, timebase: Timebase, tracker: inout CPUDeltaTracker,
+        power: PowerReading = PowerReading()
     ) -> SystemSample {
         let now = timebase.nowNanoseconds()
         let memory = memorySnapshot()
@@ -75,7 +86,11 @@ public actor LiveTelemetrySource: TelemetrySource {
             thermalState: ThermalState(platform: ProcessInfo.processInfo.thermalState),
             memoryUsedBytes: memory.used,
             memoryFreeBytes: memory.free,
-            swapUsedBytes: swapUsedBytes())
+            swapUsedBytes: swapUsedBytes(),
+            gpuBusyPercent: power.gpuBusyPercent,
+            gpuPowerMilliwatts: power.gpuPowerMilliwatts,
+            anePowerMilliwatts: power.anePowerMilliwatts,
+            packagePowerMilliwatts: power.packagePowerMilliwatts)
         let process = pid.flatMap {
             processSnapshot(pid: $0, timebase: timebase, tracker: &tracker, nowNs: now)
         }
