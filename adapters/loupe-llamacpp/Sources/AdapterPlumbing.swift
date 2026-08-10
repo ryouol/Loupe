@@ -1,0 +1,100 @@
+import Darwin
+import Foundation
+
+/// Client half of the adapter → daemon socket: best-effort line writer with
+/// the same contract as the Python adapter — a missing daemon means counted
+/// drops, never a stalled request loop.
+public final class UnixSocketLineWriter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var fd: Int32 = -1
+    public private(set) var dropped = 0
+
+    public init(socketPath: String) {
+        let socketFD = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard socketFD >= 0 else { return }
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let pathBytes = Array(socketPath.utf8)
+        guard pathBytes.count < MemoryLayout.size(ofValue: address.sun_path) else {
+            close(socketFD)
+            return
+        }
+        withUnsafeMutableBytes(of: &address.sun_path) { raw in
+            raw.copyBytes(from: pathBytes)
+        }
+        let connected = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(socketFD, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        if connected == 0 {
+            fd = socketFD
+        } else {
+            close(socketFD)
+        }
+    }
+
+    public func send(_ line: Data) {
+        lock.withLock {
+            guard fd >= 0 else {
+                dropped += 1
+                return
+            }
+            var payload = line
+            payload.append(UInt8(ascii: "\n"))
+            let written = payload.withUnsafeBytes { raw in
+                write(fd, raw.baseAddress, raw.count)
+            }
+            if written != payload.count {
+                dropped += 1
+                close(fd)
+                fd = -1
+            }
+        }
+    }
+
+    public func close() {
+        lock.withLock {
+            if fd >= 0 {
+                Darwin.close(fd)
+                fd = -1
+            }
+        }
+    }
+
+    private func close(_ descriptor: Int32) {
+        Darwin.close(descriptor)
+    }
+}
+
+/// Polls `/metrics` at the spec's 10 Hz, keeping the latest gauge snapshot.
+public actor MetricsPoller {
+    public private(set) var latest: [String: Double] = [:]
+    private let url: URL
+    private var task: Task<Void, Never>?
+
+    public init(url: URL) {
+        self.url = url
+    }
+
+    public func start(intervalMs: Int = 100) {
+        stop()
+        let url = url
+        task = Task {
+            while !Task.isCancelled {
+                if let (data, _) = try? await URLSession.shared.data(from: url) {
+                    let parsed = PrometheusParser.parse(String(decoding: data, as: UTF8.self))
+                    if !parsed.isEmpty {
+                        self.latest = parsed
+                    }
+                }
+                try? await Task.sleep(for: .milliseconds(intervalMs))
+            }
+        }
+    }
+
+    public func stop() {
+        task?.cancel()
+        task = nil
+    }
+}

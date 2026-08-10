@@ -54,10 +54,20 @@ let package = Package(
             name: "loupe-bench",
             dependencies: ["LoupeCore", "LoupeBench", "LoupeSampler"]
         ),
+        .target(
+            name: "LoupeLlamaCpp",
+            dependencies: ["LoupeCore"],
+            path: "adapters/loupe-llamacpp/Sources"
+        ),
         .executableTarget(
             name: "loupe-llamacpp",
-            dependencies: ["LoupeCore"],
-            path: "adapters/loupe-llamacpp"
+            dependencies: ["LoupeCore", "LoupeLlamaCpp"],
+            path: "adapters/loupe-llamacpp/Main"
+        ),
+        .testTarget(
+            name: "LoupeLlamaCppTests",
+            dependencies: ["LoupeLlamaCpp"],
+            path: "adapters/loupe-llamacpp/Tests"
         ),
         .testTarget(name: "LoupeCoreTests", dependencies: ["LoupeCore"]),
         .testTarget(name: "LoupeBenchTests", dependencies: ["LoupeBench"]),
