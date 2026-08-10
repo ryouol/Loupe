@@ -33,6 +33,22 @@ final class DownsampleTests: XCTestCase {
         XCTAssertEqual(Downsample.lttb(points, to: 50, x: { $0.x }, y: { $0.y }), points)
     }
 
+    func testThresholdTwoKeepsEndpointsOnly() {
+        // Pins the "at most threshold points" contract below LTTB's three
+        // buckets — this regressed silently once already.
+        let points = (0..<10).map { Point(x: Double($0), y: Double($0)) }
+        XCTAssertEqual(
+            Downsample.lttb(points, to: 2, x: { $0.x }, y: { $0.y }),
+            [points[0], points[9]])
+    }
+
+    func testNearestIndexTieBreaksToLaterElement() {
+        // Both pre-consolidation implementations resolved exact midpoints to
+        // the later element; SortedSearch must keep that convention.
+        XCTAssertEqual(SortedSearch.nearestIndex([0.0, 1, 2, 3, 4], to: 1.5), 2)
+        XCTAssertEqual(SortedSearch.nearestIndex([0.0, 1, 2, 3, 4], to: 1.4), 1)
+    }
+
     func testXOrderIsPreserved() {
         let points = (0..<5_000).map {
             Point(x: Double($0), y: Double.random(in: 0...100))

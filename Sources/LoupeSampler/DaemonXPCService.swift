@@ -118,9 +118,9 @@ public final class DaemonListenerDelegate: NSObject, NSXPCListenerDelegate, Send
     public func listener(
         _ listener: NSXPCListener, shouldAcceptNewConnection newConnection: NSXPCConnection
     ) -> Bool {
-        // TODO(M1): require a code-signing entitlement match on the peer
-        // before accepting — a root daemon must not trust arbitrary callers.
-        // Needs the Team ID, so it lands with real signing.
+        // TODO(pre-release gate): require a code-signing entitlement match
+        // on the peer before accepting — a root daemon must not trust
+        // arbitrary callers. Blocked on Developer ID distribution signing.
         newConnection.exportedInterface = NSXPCInterface(with: LoupeDaemonXPCProtocol.self)
         newConnection.remoteObjectInterface = NSXPCInterface(
             with: LoupeSampleReceiverXPCProtocol.self)

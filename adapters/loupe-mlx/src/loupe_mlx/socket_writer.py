@@ -67,7 +67,12 @@ class SocketEventWriter:
             self.dropped += 1
 
     def close(self, timeout: float = 5.0) -> None:
-        self._queue.put(_CLOSE)
+        # A full queue must not turn close() into an unbounded wait — the
+        # timeout bounds the whole call, sentinel included.
+        try:
+            self._queue.put(_CLOSE, timeout=timeout)
+        except queue.Full:
+            pass
         self._thread.join(timeout=timeout)
         if self._socket is not None:
             try:

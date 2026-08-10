@@ -14,7 +14,11 @@ public enum LlamaRequestTrace {
         chunks: [LlamaCompletionChunk],
         kv: KVCacheModel
     ) -> [EventEnvelope] {
-        guard let timings = chunks.last?.timings ?? chunks.compactMap(\.timings).last else {
+        // The server is untrusted input: NaN/inf timings must become an
+        // error trace, not a UInt64-conversion trap.
+        guard let timings = chunks.last?.timings ?? chunks.compactMap(\.timings).last,
+            timings.promptMs.isFinite, timings.predictedMs.isFinite
+        else {
             return [
                 EventEnvelope(
                     ts: requestStartNs, runId: runId, requestId: requestId,
@@ -25,7 +29,7 @@ public enum LlamaRequestTrace {
                     payload: .error(
                         ErrorPayload(
                             code: "missing_timings",
-                            message: "completion stream ended without a timings object"))),
+                            message: "completion stream ended without usable timings"))),
                 EventEnvelope(
                     ts: chunkArrivalsNs.last ?? requestStartNs, runId: runId,
                     requestId: requestId,
@@ -46,8 +50,11 @@ public enum LlamaRequestTrace {
                 payload: .prefillEnd(PrefillEndPayload(promptTokens: promptTokens))),
         ]
 
-        // One tick per streamed content chunk at its arrival time. KV grows
-        // by the architecture model, computed — never read — per the spec.
+        // One tick per streamed content chunk at its arrival time, clamped
+        // forward to prefill_end: server-truth prompt_ms can postdate the
+        // first chunks' arrivals, and a tick before its own prefill would be
+        // a lie worse than a few collapsed early timestamps. KV grows by the
+        // architecture model, computed — never read — per the spec.
         // activeMemoryBytes stays 0: this adapter has no view into the
         // server's allocator; per-process RSS is the daemon's job.
         var produced = 0

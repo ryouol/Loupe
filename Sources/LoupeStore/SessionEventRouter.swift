@@ -42,7 +42,14 @@ public actor SessionEventRouter {
         guard let batch = pending.removeValue(forKey: runId), !batch.isEmpty,
             let store = stores[runId]
         else { return }
-        try await store.append(events: batch)
+        do {
+            try await store.append(events: batch)
+        } catch {
+            // A failed write (SQLite busy, disk full) must not lose the
+            // batch: re-queue it ahead of anything routed during the await.
+            pending[runId] = batch + (pending[runId] ?? [])
+            throw error
+        }
     }
 
     private func store(for envelope: EventEnvelope) throws -> SessionStore {

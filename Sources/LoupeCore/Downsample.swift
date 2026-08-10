@@ -5,6 +5,11 @@ public enum Downsample {
     public static func lttb<T>(
         _ points: [T], to threshold: Int, x: (T) -> Double, y: (T) -> Double
     ) -> [T] {
+        // LTTB needs three buckets; threshold 2 still honors the "at most
+        // threshold points" contract by keeping the endpoints.
+        if threshold == 2 && points.count > 2 {
+            return [points[0], points[points.count - 1]]
+        }
         guard threshold >= 3, points.count > threshold else { return points }
 
         var sampled: [T] = []

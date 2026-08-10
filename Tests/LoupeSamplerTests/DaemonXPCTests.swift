@@ -11,10 +11,13 @@ import XCTest
 final class DaemonXPCTests: XCTestCase {
     private func makeConnectedClient() -> (DaemonXPCClient, NSXPCListener, DaemonListenerDelegate) {
         let listener = NSXPCListener.anonymous()
-        // Composition is explicit now: tests pick the plain live source, the
-        // daemon's main.swift is where IOReport gets added.
+        // Composition is explicit now; include the IOReport reader like the
+        // daemon's composition root does, so on real hardware this test
+        // still covers GPU data surviving the XPC round trip.
         let delegate = DaemonListenerDelegate(daemonVersion: "test-0.0.1") { cadence in
-            LiveTelemetrySource(targetPID: nil, cadence: cadence)
+            LiveTelemetrySource(
+                targetPID: nil, cadence: cadence,
+                makePowerReader: { IOReportPowerReader() })
         }
         listener.delegate = delegate
         listener.resume()

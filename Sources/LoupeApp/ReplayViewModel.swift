@@ -170,17 +170,25 @@ public final class ReplayViewModel {
     ) -> Assembled {
         var assembled = Assembled()
 
-        // Adapter clocks map onto the sample clock first (min-RTT clock_sync
-        // estimate; 0 for same-machine adapters), then one zero serves every
-        // lane — charts, swimlanes, annotations — or the timeline lies about
-        // correlation.
+        // Adapter clocks map onto the sample clock once, up front (min-RTT
+        // clock_sync estimate; 0 for same-machine adapters). Every consumer
+        // below — milestones, metrics, spans, annotations — sees sample-clock
+        // events, so nothing downstream needs to know which rule derived a
+        // timestamp from a sample versus an event.
         let offset = TimelineMerge.offset(fromClockSyncEvents: envelopes)
-        func unified(_ eventTs: UInt64) -> UInt64 {
-            TimelineMerge.shifted(eventTs, byRemovingOffset: offset)
-        }
+        let unifiedEnvelopes =
+            offset == 0
+            ? envelopes
+            : envelopes.map { envelope in
+                EventEnvelope(
+                    ts: TimelineMerge.shifted(envelope.ts, byRemovingOffset: offset),
+                    runId: envelope.runId,
+                    requestId: envelope.requestId,
+                    payload: envelope.payload)
+            }
         let zeroTs = min(
             samples.first?.system.ts ?? UInt64.max,
-            envelopes.first.map { unified($0.ts) } ?? UInt64.max)
+            unifiedEnvelopes.first?.ts ?? UInt64.max)
         guard zeroTs != UInt64.max else { return assembled }
         func seconds(_ ts: UInt64) -> Double {
             Double(ts &- zeroTs) / 1e9
@@ -203,7 +211,7 @@ public final class ReplayViewModel {
             $0.gpuBusyPercent != nil || $0.packagePowerWatts != nil
         }
 
-        for envelope in envelopes {
+        for envelope in unifiedEnvelopes {
             if envelope.kind == .decodeTick {
                 assembled.decodeTickCount += 1
                 continue
@@ -211,23 +219,23 @@ public final class ReplayViewModel {
             assembled.milestones.append(
                 Milestone(
                     id: assembled.milestones.count,
-                    offsetSeconds: seconds(unified(envelope.ts)),
+                    offsetSeconds: seconds(envelope.ts),
                     kind: envelope.kind,
                     requestId: envelope.requestId,
                     detail: describe(envelope.payload)))
         }
 
-        assembled.metrics = SessionMetrics.perRequest(events: envelopes)
+        assembled.metrics = SessionMetrics.perRequest(events: unifiedEnvelopes)
         assembled.spans = TimelineGeometry.requestSpans(
             metrics: assembled.metrics, milestones: assembled.milestones)
         assembled.annotations = AnnotationEngine.annotate(
-            samples: samples, events: envelopes, metrics: assembled.metrics
+            samples: samples, events: unifiedEnvelopes, metrics: assembled.metrics
         )
         .map { annotation in
             AnnotationRow(
                 id: annotation.id,
                 kind: annotation.kind,
-                atSeconds: seconds(unified(annotation.atNs)),
+                atSeconds: seconds(annotation.atNs),
                 message: annotation.message,
                 evidence: annotation.evidence)
         }

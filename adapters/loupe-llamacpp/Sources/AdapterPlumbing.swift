@@ -1,13 +1,20 @@
 import Darwin
 import Foundation
 
-/// Client half of the adapter → daemon socket: best-effort line writer with
-/// the same contract as the Python adapter — a missing daemon means counted
-/// drops, never a stalled request loop.
+/// Client half of the adapter → daemon socket: best-effort line writer.
+/// Writes are synchronous, which is fine here and only here: this executable
+/// emits a request's whole trace after the stream completes, so a slow write
+/// never sits inside a generation loop (the in-process Python adapter uses a
+/// queue for exactly that reason). @unchecked because every access to `fd`
+/// and the drop counter goes through `lock`.
 public final class UnixSocketLineWriter: @unchecked Sendable {
     private let lock = NSLock()
     private var fd: Int32 = -1
-    public private(set) var dropped = 0
+    private var droppedCount = 0
+
+    public var dropped: Int {
+        lock.withLock { droppedCount }
+    }
 
     public init(socketPath: String) {
         let socketFD = socket(AF_UNIX, SOCK_STREAM, 0)
@@ -37,7 +44,7 @@ public final class UnixSocketLineWriter: @unchecked Sendable {
     public func send(_ line: Data) {
         lock.withLock {
             guard fd >= 0 else {
-                dropped += 1
+                droppedCount += 1
                 return
             }
             var payload = line
@@ -46,7 +53,7 @@ public final class UnixSocketLineWriter: @unchecked Sendable {
                 write(fd, raw.baseAddress, raw.count)
             }
             if written != payload.count {
-                dropped += 1
+                droppedCount += 1
                 close(fd)
                 fd = -1
             }
@@ -78,6 +85,12 @@ public actor MetricsPoller {
 
     public init(url: URL) {
         self.url = url
+    }
+
+    deinit {
+        // `start`'s task captures self; without this, an abandoned poller
+        // polls forever.
+        task?.cancel()
     }
 
     public func start(intervalMs: Int = 100) {

@@ -30,8 +30,9 @@ extension ThermalState {
     }
 }
 
-/// Everything readable without root: thermal, memory, swap, per-PID CPU/RSS.
-/// GPU/power fields stay nil here forever — IOReport lands in M1.2.
+/// Thermal, memory, swap, and per-PID CPU/RSS — all readable without root.
+/// GPU/power channels come from the injected IOReport reader; without one
+/// those fields stay nil and the UI hides their charts.
 public actor LiveTelemetrySource: TelemetrySource {
     private let targetPID: Int32?
     private let cadence: Duration

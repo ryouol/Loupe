@@ -67,15 +67,22 @@ listener.resume()
 // Adapter ingest: Unix socket → validated envelopes → per-run SQLite. Bind
 // failure degrades to XPC-only service; adapters see counted drops, the
 // daemon never exits over it.
+let server = EventSocketServer(socketPath: LoupeDaemon.adapterSocketPath)
+let sessionsDirectory = try? FileManager.default.url(
+    for: .applicationSupportDirectory, in: .userDomainMask,
+    appropriateFor: nil, create: true
+).appendingPathComponent("Loupe/sessions", isDirectory: true)
+let router = sessionsDirectory.map {
+    SessionEventRouter(directory: $0, host: HostInfo.fingerprint())
+}
+
 let ingest = Task {
-    let server = EventSocketServer(socketPath: LoupeDaemon.adapterSocketPath)
+    guard let router else {
+        logLine("no writable sessions directory — running XPC-only")
+        return
+    }
     do {
         let stream = try await server.start()
-        let sessions = try FileManager.default.url(
-            for: .applicationSupportDirectory, in: .userDomainMask,
-            appropriateFor: nil, create: true
-        ).appendingPathComponent("Loupe/sessions", isDirectory: true)
-        let router = SessionEventRouter(directory: sessions, host: HostInfo.fingerprint())
         logLine("adapter socket listening at \(LoupeDaemon.adapterSocketPath)")
         for await envelope in stream {
             do {
@@ -90,7 +97,26 @@ let ingest = Task {
     }
 }
 
+// launchctl stops daemons with SIGTERM: without draining first, every
+// sub-batch-threshold event still pending in the router would vanish while
+// the run's SQLite file looks complete.
+signal(SIGTERM, SIG_IGN)
+signal(SIGINT, SIG_IGN)
+let terminationSources = [SIGTERM, SIGINT].map { signalNumber in
+    let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .main)
+    source.setEventHandler {
+        Task {
+            await server.stop()
+            try? await router?.flushAll()
+            logLine("loupedaemon draining complete; exiting")
+            exit(0)
+        }
+    }
+    source.resume()
+    return source
+}
+
 logLine("loupedaemon \(Loupe.version) listening on \(LoupeDaemon.machServiceName)")
-withExtendedLifetime(ingest) {
+withExtendedLifetime((ingest, terminationSources)) {
     RunLoop.main.run()
 }

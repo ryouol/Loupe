@@ -3,21 +3,33 @@ import Foundation
 import LoupeCore
 
 /// The adapters → daemon ingest path: a Unix-domain listener that validates
-/// every NDJSON line through the protocol decoder. All socket work happens on
-/// GCD dispatch sources (never a blocked cooperative thread); envelopes cross
-/// into async land through one stream.
+/// every NDJSON line through the protocol decoder. Socket work happens on
+/// GCD dispatch sources; their handlers yield synchronously into one command
+/// stream consumed by one pump task, so a connection's bytes reach the actor
+/// in exactly the order they arrived — independent Task hops would not
+/// guarantee that (same hazard DaemonXPCService documents for start/stop).
 ///
-/// Adapters are untrusted input: lines are bounded before buffering, malformed
-/// lines become counted drops, and a hostile connection cannot allocate more
-/// than the line cap per read.
+/// Adapters are untrusted input: lines are bounded, malformed lines become
+/// counted drops, buffered unterminated data is capped, and consumer
+/// backpressure past the stream buffer is counted, never silent.
 public actor EventSocketServer {
     public private(set) var drops = EventDropCounter()
+    /// Envelopes evicted because the consumer fell behind the stream buffer.
+    public private(set) var overflowDrops = 0
+
+    private enum Command: Sendable {
+        case accepted(Int32)
+        case data(Int32, Data)
+        case closed(Int32)
+    }
 
     private let socketPath: String
     private var listenFD: Int32 = -1
     private var listenSource: (any DispatchSourceRead)?
     private var connections: [Int32: ConnectionState] = [:]
-    private var continuation: AsyncStream<EventEnvelope>.Continuation?
+    private var envelopeContinuation: AsyncStream<EventEnvelope>.Continuation?
+    private var commandContinuation: AsyncStream<Command>.Continuation?
+    private var pump: Task<Void, Never>?
     private let queue = DispatchQueue(label: "ai.squint.loupe.event-socket")
 
     private final class ConnectionState {
@@ -65,53 +77,74 @@ public actor EventSocketServer {
         }
 
         listenFD = fd
-        let (stream, continuation) = AsyncStream.makeStream(
+        let (envelopes, envelopeContinuation) = AsyncStream.makeStream(
             of: EventEnvelope.self, bufferingPolicy: .bufferingNewest(65_536))
-        self.continuation = continuation
+        self.envelopeContinuation = envelopeContinuation
+        let (commands, commandContinuation) = AsyncStream.makeStream(of: Command.self)
+        self.commandContinuation = commandContinuation
 
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
-        source.setEventHandler { [weak self] in
+        source.setEventHandler {
             let client = accept(fd, nil, nil)
-            guard client >= 0, let self else { return }
-            Task { await self.register(client: client) }
+            guard client >= 0 else { return }
+            commandContinuation.yield(.accepted(client))
         }
         source.resume()
         listenSource = source
-        return stream
+
+        pump = Task {
+            for await command in commands {
+                switch command {
+                case .accepted(let client): self.register(client: client)
+                case .data(let client, let data): self.ingest(data, from: client)
+                case .closed(let client): self.disconnect(client: client)
+                }
+            }
+        }
+        return envelopes
     }
 
     public func stop() {
+        commandContinuation?.finish()
+        commandContinuation = nil
+        pump?.cancel()
+        pump = nil
         listenSource?.cancel()
         listenSource = nil
         if listenFD >= 0 {
             close(listenFD)
             listenFD = -1
         }
-        for (fd, state) in connections {
+        for state in connections.values {
+            // The cancel handler owns the fd close — closing here would race
+            // a handler mid-read on the socket queue.
             state.source.cancel()
-            close(fd)
         }
         connections.removeAll()
-        continuation?.finish()
-        continuation = nil
+        envelopeContinuation?.finish()
+        envelopeContinuation = nil
         unlink(socketPath)
     }
 
     private func register(client: Int32) {
+        guard let commandContinuation else {
+            close(client)
+            return
+        }
         let source = DispatchSource.makeReadSource(fileDescriptor: client, queue: queue)
-        let state = ConnectionState(source: source)
-        connections[client] = state
+        connections[client] = ConnectionState(source: source)
 
-        source.setEventHandler { [weak self] in
+        source.setEventHandler {
             var chunk = [UInt8](repeating: 0, count: 16_384)
             let count = read(client, &chunk, chunk.count)
-            guard let self else { return }
             if count > 0 {
-                let data = Data(chunk[0..<count])
-                Task { await self.ingest(data, from: client) }
+                commandContinuation.yield(.data(client, Data(chunk[0..<count])))
             } else {
-                Task { await self.disconnect(client: client) }
+                commandContinuation.yield(.closed(client))
             }
+        }
+        source.setCancelHandler {
+            close(client)
         }
         source.resume()
     }
@@ -126,8 +159,12 @@ public actor EventSocketServer {
             state.buffer.removeSubrange(state.buffer.startIndex...newline)
             guard !line.isEmpty else { continue }
             switch decoder.decode(line: line) {
-            case .success(let envelope): continuation?.yield(envelope)
-            case .failure(let reason): drops.record(reason)
+            case .success(let envelope):
+                if case .dropped = envelopeContinuation?.yield(envelope) {
+                    overflowDrops += 1
+                }
+            case .failure(let reason):
+                drops.record(reason)
             }
         }
         // A line that never terminates must not buffer unboundedly.
@@ -138,9 +175,10 @@ public actor EventSocketServer {
     }
 
     private func disconnect(client: Int32) {
+        // Ordered after every .data this connection yielded, so its final
+        // line is always ingested before teardown.
         guard let state = connections.removeValue(forKey: client) else { return }
         state.source.cancel()
-        close(client)
     }
 
     public enum SocketError: Error, Equatable {

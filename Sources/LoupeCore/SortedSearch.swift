@@ -15,8 +15,9 @@ public enum SortedSearch {
         return low
     }
 
-    /// Index of the element whose key is closest to value; ties resolve to
-    /// the earlier element. nil only for empty input.
+    /// Index of the element whose key is closest to value; exact ties
+    /// resolve to the later element — the convention both pre-consolidation
+    /// implementations shared. nil only for empty input.
     public static func nearestIndex<Element, Key: Comparable>(
         _ sorted: [Element], to value: Key, key: (Element) -> Key,
         distance: (Key, Key) -> Key
@@ -27,7 +28,7 @@ public enum SortedSearch {
         if bound == 0 { return 0 }
         let left = key(sorted[bound - 1])
         let right = key(sorted[bound])
-        return distance(value, left) <= distance(right, value) ? bound - 1 : bound
+        return distance(value, left) < distance(right, value) ? bound - 1 : bound
     }
 
     public static func nearestIndex(_ sorted: [Double], to value: Double) -> Int? {

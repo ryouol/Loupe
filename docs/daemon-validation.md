@@ -22,7 +22,16 @@ Everything else (XPC round trip, streaming, the degraded path) is covered by
 2. **Register.** Launch the app (from `/Applications` — SMAppService is
    picky about translocated paths), open **Daemon** in the sidebar, click
    **Install…**. Expected status: *Waiting for approval*; System
-   Settings → Login Items opens automatically.
+   Settings → Login Items opens automatically. Headless alternative (used
+   by the scripted validation run):
+
+   ```bash
+   /Applications/Loupe.app/Contents/MacOS/loupedaemon --register
+   /Applications/Loupe.app/Contents/MacOS/loupedaemon --status
+   ```
+
+   `--register` reports "Operation not permitted" while lodging the
+   request — status moving to `requiresApproval` is the success signal.
 3. **Approve** the daemon under "Allow in the Background", then click
    **Refresh** in the app — status must flip to *Running* and streaming
    starts on its own (no separate start control exists).
@@ -45,10 +54,8 @@ Everything else (XPC round trip, streaming, the degraded path) is covered by
 8. **Uninstall.** Click **Uninstall**; status returns to *Not installed*
    and `launchctl list` no longer shows the label.
 
-## Known limits at M0.6
+## Known limits
 
-- The daemon streams unprivileged system-wide samples only; per-process and
-  GPU/power channels arrive with M1.1/M1.2 (IOReport needs the root context
-  this daemon now provides).
-- The listener does not yet verify the peer's code signature — gated on the
-  Team ID, tracked as a TODO in `DaemonListenerDelegate` for M1.
+- The XPC listener does not yet verify the peer's code signature — tracked
+  as a pre-release TODO in `DaemonListenerDelegate`, blocked on Developer ID
+  distribution signing. Do not ship the daemon to customers before it lands.
