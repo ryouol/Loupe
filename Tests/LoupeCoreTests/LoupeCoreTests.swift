@@ -4,6 +4,6 @@ import XCTest
 
 final class LoupeCoreTests: XCTestCase {
     func testVersionIsSet() {
-        XCTAssertEqual(Loupe.version, "0.0.1")
+        XCTAssertEqual(Loupe.version, "0.1.0")
     }
 }
