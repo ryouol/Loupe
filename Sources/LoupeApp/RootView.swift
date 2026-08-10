@@ -11,6 +11,7 @@ public struct RootView: View {
         case overview
         case session
         case results
+        case compare
         case daemon
 
         var id: String { rawValue }
@@ -20,6 +21,7 @@ public struct RootView: View {
             case .overview: return "Overview"
             case .session: return "Session"
             case .results: return "Results"
+            case .compare: return "Compare"
             case .daemon: return "Daemon"
             }
         }
@@ -29,6 +31,7 @@ public struct RootView: View {
             case .overview: return "gauge.with.dots.needle.50percent"
             case .session: return "waveform.path.ecg.rectangle"
             case .results: return "chart.bar.xaxis"
+            case .compare: return "square.split.2x1"
             case .daemon: return "bolt.shield"
             }
         }
@@ -67,6 +70,8 @@ public struct RootView: View {
                 SessionScreen(basePath: $sessionBasePath, onOpen: { isImporting = true })
             case .results:
                 ResultsView()
+            case .compare:
+                ComparisonView()
             case .daemon:
                 DaemonView(model: daemonModel)
             }
