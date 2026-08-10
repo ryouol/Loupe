@@ -33,6 +33,11 @@ public final class ReplayViewModel {
     /// Empty when the session carries no GPU channels — the band hides
     /// entirely rather than charting zeros.
     public private(set) var gpuChartPoints: [ChartPoint] = []
+    public private(set) var durationSeconds: Double = 0
+    var requestSpans: [TimelineGeometry.RequestSpan] = []
+    /// Shared scrubber position; every lane reads this one value, which is
+    /// what keeps them aligned by construction.
+    public var scrubSeconds: Double?
     public private(set) var milestones: [Milestone] = []
     public private(set) var requestMetrics: [RequestMetrics] = []
     public private(set) var decodeTickCount = 0
@@ -63,6 +68,7 @@ public final class ReplayViewModel {
         gpuChartPoints = chartPoints.filter {
             $0.gpuBusyPercent != nil || $0.packagePowerWatts != nil
         }
+        durationSeconds = chartPoints.last?.seconds ?? 0
         sampleDrops = telemetryResult.drops
         thermalStatesSeen = Set(telemetryResult.samples.map(\.system.thermalState)).sorted()
 
@@ -71,6 +77,8 @@ public final class ReplayViewModel {
         decodeTickCount = eventsResult.decodeTicks
         totalEventCount = eventsResult.total
         eventDrops = eventsResult.drops
+        requestSpans = TimelineGeometry.requestSpans(
+            metrics: eventsResult.metrics, milestones: eventsResult.milestones)
 
         loadFailure = telemetryResult.failure ?? eventsResult.failure
         isLoaded = loadFailure == nil
@@ -127,9 +135,13 @@ public final class ReplayViewModel {
         )
     }
 
+    /// Series cap per the M2.1 spec: LTTB to ~2k points keeps charts honest
+    /// (spikes survive) and rendering cheap on hour-long sessions.
+    private nonisolated static let maxChartPoints = 2_000
+
     private nonisolated static func chartPoints(from samples: [SystemSample]) -> [ChartPoint] {
         guard let first = samples.first?.system.ts else { return [] }
-        return samples.enumerated().map { index, sample in
+        let all = samples.enumerated().map { index, sample in
             ChartPoint(
                 id: index,
                 seconds: Double(sample.system.ts &- first) / 1e9,
@@ -139,6 +151,36 @@ public final class ReplayViewModel {
                 gpuBusyPercent: sample.system.gpuBusyPercent,
                 packagePowerWatts: sample.system.packagePowerMilliwatts.map { $0 / 1_000 })
         }
+        return Downsample.lttb(
+            all, to: maxChartPoints, x: { $0.seconds }, y: { $0.systemUsedGB })
+    }
+
+    // MARK: - Scrubbing
+
+    public struct ScrubReadout: Equatable {
+        public let seconds: Double
+        public let systemUsedGB: Double
+        public let swapUsedGB: Double
+        public let processRSSGB: Double?
+        public let gpuBusyPercent: Double?
+        public let activeRequestId: String?
+    }
+
+    /// Everything the readout shows comes from one scrub position resolved
+    /// against one point index — the alignment tests pin this.
+    public func readout(at seconds: Double) -> ScrubReadout? {
+        guard
+            let index = TimelineGeometry.nearestIndex(
+                in: chartPoints.map(\.seconds), to: seconds)
+        else { return nil }
+        let point = chartPoints[index]
+        return ScrubReadout(
+            seconds: point.seconds,
+            systemUsedGB: point.systemUsedGB,
+            swapUsedGB: point.swapUsedGB,
+            processRSSGB: point.processRSSGB,
+            gpuBusyPercent: point.gpuBusyPercent,
+            activeRequestId: TimelineGeometry.activeSpan(in: requestSpans, at: seconds)?.id)
     }
 
     private nonisolated static func describe(_ payload: EventPayload) -> String {
