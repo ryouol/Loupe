@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/ryouol/Loupe/main/protocol/events.schema.json",
   "title": "Loupe inference event envelope (v1)",
-  "description": "One event per NDJSON line. ts is mach_continuous_time nanoseconds on the emitter's clock; the clock_sync handshake maps emitter timestamps onto the daemon's clock. Changing anything here means bumping v, updating fixtures, and updating every adapter in the same commit.",
+  "description": "One event per NDJSON line. ts is mach_continuous_time nanoseconds on the emitter's clock; the clock_sync handshake maps emitter timestamps onto the app's clock. Changing anything here means bumping v, updating fixtures, and updating every adapter in the same commit.",
   "$comment": "x-limits is normative for decoders: both language implementations assert their constants against it.",
   "x-limits": { "maxLineBytes": 65536 },
   "type": "object",
@@ -10,7 +10,7 @@
   "additionalProperties": false,
   "properties": {
     "v": { "const": 1 },
-    "ts": { "type": "integer", "minimum": 0 },
+    "ts": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
     "runId": { "type": "string", "minLength": 1, "maxLength": 128 },
     "requestId": { "type": ["string", "null"], "minLength": 1, "maxLength": 128 },
     "event": {
@@ -88,7 +88,7 @@
         "adapter": { "type": "string", "minLength": 1, "maxLength": 256 },
         "adapterVersion": { "type": "string", "minLength": 1, "maxLength": 128 },
         "runtime": { "type": "string", "minLength": 1, "maxLength": 128 },
-        "pid": { "type": "integer", "minimum": 1 }
+        "pid": { "type": "integer", "minimum": 1, "maximum": 2147483647 }
       }
     },
     "clockSync": {
@@ -96,10 +96,10 @@
       "additionalProperties": false,
       "required": ["t0", "t1", "t2", "t3"],
       "properties": {
-        "t0": { "type": "integer", "minimum": 0 },
-        "t1": { "type": "integer", "minimum": 0 },
-        "t2": { "type": "integer", "minimum": 0 },
-        "t3": { "type": "integer", "minimum": 0 }
+        "t0": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+        "t1": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+        "t2": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+        "t3": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 }
       }
     },
     "modelLoadStart": {
@@ -117,14 +117,14 @@
       "properties": {
         "modelId": { "type": "string", "minLength": 1, "maxLength": 1024 },
         "ok": { "type": "boolean" },
-        "weightsBytes": { "type": "integer", "minimum": 0 }
+        "weightsBytes": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 }
       }
     },
     "requestStart": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "promptTokens": { "type": "integer", "minimum": 0 }
+        "promptTokens": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
       }
     },
     "prefillEnd": {
@@ -132,7 +132,7 @@
       "additionalProperties": false,
       "required": ["promptTokens"],
       "properties": {
-        "promptTokens": { "type": "integer", "minimum": 0 }
+        "promptTokens": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
       }
     },
     "decodeTick": {
@@ -140,9 +140,9 @@
       "additionalProperties": false,
       "required": ["outputTokens", "kvCacheBytes", "activeMemoryBytes"],
       "properties": {
-        "outputTokens": { "type": "integer", "minimum": 0 },
-        "kvCacheBytes": { "type": "integer", "minimum": 0 },
-        "activeMemoryBytes": { "type": "integer", "minimum": 0 }
+        "outputTokens": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "kvCacheBytes": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+        "activeMemoryBytes": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 }
       }
     },
     "requestEnd": {
@@ -150,7 +150,7 @@
       "additionalProperties": false,
       "required": ["outputTokens", "finishReason"],
       "properties": {
-        "outputTokens": { "type": "integer", "minimum": 0 },
+        "outputTokens": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
         "finishReason": { "type": "string", "minLength": 1, "maxLength": 64 }
       }
     },

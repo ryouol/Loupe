@@ -1,8 +1,9 @@
 import GRDB
 
 /// One SQLite file per session; migrations are append-only.
-/// `ts_ns` columns store UInt64 nanoseconds as Int64 bit patterns (SQLite
-/// integers are signed); ordering diverges only past 2^63 ns ≈ 292 years.
+/// `ts_ns` columns store UInt64 nanoseconds as Int64 bit patterns because
+/// SQLite integers are signed. SessionStore queries explicitly restore
+/// unsigned ordering across the 2^63 boundary.
 enum LoupeSchema {
     static var migrator: DatabaseMigrator {
         var migrator = DatabaseMigrator()

@@ -11,14 +11,16 @@ public enum ComparisonExport {
         var lines: [String] = []
         if let deltas = comparison.deltas {
             lines.append(
-                "context_tokens,metric,\(field(baselineName))_p50,\(field(candidateName))_p50,delta_percent"
+                "context_tokens,metric,\(field(baselineName + "_p50")),"
+                    + "\(field(candidateName + "_p50")),delta_percent"
             )
             for delta in deltas {
                 lines.append(
                     "\(delta.contextTokens),\(field(delta.metric)),"
                         + String(
-                            format: "%.4f,%.4f,%.2f", delta.baselineP50, delta.candidateP50,
-                            delta.deltaPercent))
+                            format: "%.4f,%.4f,%.2f",
+                            locale: Locale(identifier: "en_US_POSIX"),
+                            delta.baselineP50, delta.candidateP50, delta.deltaPercent))
             }
         } else {
             lines.append("mismatched_dimension,\(field(baselineName)),\(field(candidateName))")
@@ -75,10 +77,20 @@ public enum ComparisonExport {
         return try JSONEncoder.deterministic().encode(payload)
     }
 
-    /// CSV field sanitizer: commas and quotes would silently shear columns.
+    /// CSV field sanitizer: preserve columns and prevent spreadsheet formulas
+    /// from executing when filenames or report metadata are attacker-chosen.
     private static func field(_ raw: String) -> String {
-        raw.contains(",") || raw.contains("\"")
-            ? "\"" + raw.replacingOccurrences(of: "\"", with: "\"\"") + "\""
-            : raw
+        let safe: String
+        if let first = raw.first,
+            "=+-@".contains(first) || first == "\t" || first == "\r"
+        {
+            safe = "'" + raw
+        } else {
+            safe = raw
+        }
+        return safe.contains(",") || safe.contains("\"") || safe.contains("\n")
+            || safe.contains("\r")
+            ? "\"" + safe.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+            : safe
     }
 }

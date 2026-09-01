@@ -10,8 +10,10 @@ public enum LoupeDaemon {
     /// pins the committed plist to these constants.
     public static let machServiceName = "ai.squint.loupe.daemon"
     public static let plistName = machServiceName + ".plist"
-    /// Runtime adapters connect here (mirrored in loupe_mlx/adapter.py).
-    public static let adapterSocketPath = "/var/run/ai.squint.loupe.sock"
+    /// Bundle identifier enforced by the privileged listener's designated
+    /// requirement. The team identifier is derived from the helper's own
+    /// signature at runtime; it is never committed to source.
+    public static let appBundleIdentifier = "ai.squint.loupe"
 }
 
 /// First message on every connection; proves protocol compatibility before
@@ -30,8 +32,9 @@ public struct DaemonHandshake: Codable, Sendable, Equatable {
 
 /// Daemon-exported interface (app → daemon).
 @objc public protocol LoupeDaemonXPCProtocol {
-    /// Replies with JSON-encoded `DaemonHandshake`.
-    func handshake(reply: @escaping @Sendable (Data) -> Void)
+    /// Replies with JSON-encoded `DaemonHandshake`; an empty reply means the
+    /// client protocol version is unsupported.
+    func handshake(clientProtocolVersion: Int, reply: @escaping @Sendable (Data) -> Void)
     func startSampleStream(intervalMs: Int)
     func stopSampleStream()
 }

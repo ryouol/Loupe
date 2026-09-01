@@ -130,6 +130,7 @@ final class TimelineAlignmentTests: XCTestCase {
         let offset: UInt64 = 40_000_000
         let syncT0: UInt64 = 1_000_000_000
         let eventLines = [
+            #"{"v":1,"ts":\#(syncT0 + offset),"runId":"r-o","event":"session_start","payload":{"adapter":"test","adapterVersion":"1","runtime":"mlx","pid":9}}"#,
             #"{"v":1,"ts":\#(syncT0 + offset + 2_000_000),"runId":"r-o","event":"clock_sync","payload":{"t0":\#(syncT0),"t1":\#(syncT0 + offset + 2_000_000),"t2":\#(syncT0 + offset + 2_500_000),"t3":\#(syncT0 + 4_500_000)}}"#,
             #"{"v":1,"ts":\#(1_250_000_000 + offset),"runId":"r-o","requestId":"q-1","event":"request_start","payload":{}}"#,
             #"{"v":1,"ts":\#(1_350_000_000 + offset),"runId":"r-o","requestId":"q-1","event":"prefill_end","payload":{"promptTokens":8}}"#,

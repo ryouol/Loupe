@@ -92,5 +92,8 @@ final class TimelineMergeTests: XCTestCase {
             TimelineMerge.shifted(UInt64.max - 10, byRemovingOffset: -500), UInt64.max)
         XCTAssertEqual(TimelineMerge.shifted(1_000, byRemovingOffset: 400), 600)
         XCTAssertEqual(TimelineMerge.shifted(1_000, byRemovingOffset: -400), 1_400)
+        XCTAssertEqual(
+            TimelineMerge.shifted(1_000, byRemovingOffset: Int64.min),
+            UInt64(Int64.max) + 1_001)
     }
 }

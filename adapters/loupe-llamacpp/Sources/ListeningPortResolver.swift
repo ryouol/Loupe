@@ -6,7 +6,9 @@ import Foundation
 /// told its PID. Root-free for same-user processes, which is the case that
 /// matters (the user launched both).
 public enum ListeningPortResolver {
-    public static func pid(listeningOn port: UInt16) -> Int32? {
+    public static func pid(
+        listeningOn port: UInt16, requiredUID: uid_t = geteuid()
+    ) -> Int32? {
         var pidCount = proc_listallpids(nil, 0)
         guard pidCount > 0 else { return nil }
         var pids = [Int32](repeating: 0, count: Int(pidCount) * 2)
@@ -14,11 +16,21 @@ public enum ListeningPortResolver {
         guard pidCount > 0 else { return nil }
 
         for pid in pids.prefix(Int(pidCount)) where pid > 0 {
-            if ownsListeningPort(pid: pid, port: port) {
+            if owner(of: pid) == requiredUID, ownsListeningPort(pid: pid, port: port) {
                 return pid
             }
         }
         return nil
+    }
+
+    private static func owner(of pid: Int32) -> uid_t? {
+        var information = proc_bsdinfo()
+        let expected = Int32(MemoryLayout<proc_bsdinfo>.size)
+        let actual = withUnsafeMutablePointer(to: &information) { pointer in
+            proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, pointer, expected)
+        }
+        guard actual == expected else { return nil }
+        return information.pbi_uid
     }
 
     private static func ownsListeningPort(pid: Int32, port: UInt16) -> Bool {

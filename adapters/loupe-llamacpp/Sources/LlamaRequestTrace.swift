@@ -17,7 +17,10 @@ public enum LlamaRequestTrace {
         // The server is untrusted input: NaN/inf timings must become an
         // error trace, not a UInt64-conversion trap.
         guard let timings = chunks.last?.timings ?? chunks.compactMap(\.timings).last,
-            timings.promptMs.isFinite, timings.predictedMs.isFinite
+            timings.promptN >= 0, timings.predictedN >= 0,
+            timings.promptMs.isFinite, timings.promptMs >= 0,
+            timings.predictedMs.isFinite, timings.predictedMs >= 0,
+            timings.predictedPerSecond.isFinite, timings.predictedPerSecond >= 0
         else {
             return [
                 EventEnvelope(
@@ -39,7 +42,9 @@ public enum LlamaRequestTrace {
         }
 
         let promptTokens = UInt32(clamping: timings.promptN)
-        let prefillEndNs = requestStartNs + UInt64(max(0, timings.promptMs) * 1_000_000)
+        let promptDurationNs = nanoseconds(milliseconds: timings.promptMs)
+        let predictedDurationNs = nanoseconds(milliseconds: timings.predictedMs)
+        let prefillEndNs = adding(promptDurationNs, to: requestStartNs)
 
         var events: [EventEnvelope] = [
             EventEnvelope(
@@ -61,19 +66,21 @@ public enum LlamaRequestTrace {
         for (index, chunk) in chunks.enumerated() where !chunk.content.isEmpty {
             produced += 1
             let ts = index < chunkArrivalsNs.count ? chunkArrivalsNs[index] : prefillEndNs
+            let tokenTotal = timings.promptN.addingReportingOverflow(produced)
             events.append(
                 EventEnvelope(
                     ts: max(ts, prefillEndNs), runId: runId, requestId: requestId,
                     payload: .decodeTick(
                         DecodeTickPayload(
-                            outputTokens: UInt32(produced),
-                            kvCacheBytes: kv.bytes(forTokens: timings.promptN + produced),
+                            outputTokens: UInt32(clamping: produced),
+                            kvCacheBytes: kv.bytes(
+                                forTokens: tokenTotal.overflow ? Int.max : tokenTotal.partialValue),
                             activeMemoryBytes: 0))))
         }
 
-        let endNs = max(
-            chunkArrivalsNs.last ?? prefillEndNs,
-            requestStartNs + UInt64(max(0, timings.promptMs + timings.predictedMs) * 1_000_000))
+        let modeledEnd = adding(
+            adding(promptDurationNs, to: predictedDurationNs), to: requestStartNs)
+        let endNs = max(chunkArrivalsNs.last ?? prefillEndNs, modeledEnd)
         events.append(
             EventEnvelope(
                 ts: endNs, runId: runId, requestId: requestId,
@@ -82,5 +89,16 @@ public enum LlamaRequestTrace {
                         outputTokens: UInt32(clamping: timings.predictedN),
                         finishReason: chunks.last?.stop == true ? "stop" : "length"))))
         return events
+    }
+
+    private static func nanoseconds(milliseconds: Double) -> UInt64 {
+        guard milliseconds > 0 else { return 0 }
+        let value = milliseconds * 1_000_000
+        guard value.isFinite, value < Double(UInt64.max) else { return UInt64.max }
+        return UInt64(value)
+    }
+
+    private static func adding(_ amount: UInt64, to value: UInt64) -> UInt64 {
+        value <= UInt64.max - amount ? value + amount : UInt64.max
     }
 }

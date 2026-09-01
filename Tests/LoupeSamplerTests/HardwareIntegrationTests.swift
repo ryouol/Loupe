@@ -3,6 +3,7 @@ import XCTest
 
 @testable import LoupeCore
 @testable import LoupeSampler
+@testable import LoupeTelemetry
 
 /// The `.needsHardware` suite: runs only when LOUPE_HARDWARE_TESTS=1 because
 /// it depends on real scheduler behavior and the `top` binary — meaningless

@@ -147,12 +147,43 @@ final class BenchmarkSpecTests: XCTestCase {
         XCTAssertEqual(spec.contexts, [128, 512])
         XCTAssertEqual(spec.repeats, 3)
         XCTAssertEqual(spec.seed, 42)
-        XCTAssertEqual(spec.comparableDimensions.map(\.name).count, 7)
+        XCTAssertEqual(spec.comparableDimensions.map(\.name).count, 11)
+        XCTAssertEqual(spec.promptCorpusSHA256.count, 64)
     }
 
     func testMalformedYAMLThrows() {
         XCTAssertThrowsError(try BenchmarkSpec.fromYAML("model: [unclosed"))
         XCTAssertThrowsError(try BenchmarkSpec.fromYAML("runtime: mlx"))
+        XCTAssertThrowsError(
+            try BenchmarkSpec.fromYAML(
+                """
+                model: m
+                runtime: mlx
+                quantization: 4bit
+                contexts: [128]
+                batch: 1
+                promptCorpus: [p]
+                outputTokens: 32
+                repeats: 2
+                warmup: 1
+                seed: 1
+                cooldownTimeoutSeconds: 60
+                hiddenPrompt: do-not-ignore
+                """))
+    }
+
+    func testUnsafeOrUnsupportedSpecValuesAreRejected() {
+        let spec = BenchmarkSpec(
+            model: "model", runtime: "mlx", quantization: "4bit",
+            contexts: [128, 128, -1], batch: 8, promptCorpus: [],
+            outputTokens: 0, repeats: 0, warmup: 40,
+            cooldownTimeoutSeconds: .infinity)
+        XCTAssertEqual(
+            Set(spec.validationFailures),
+            Set([
+                "contexts", "batch", "promptCorpus", "outputTokens", "repeats", "warmup",
+                "cooldownTimeoutSeconds",
+            ]))
     }
 }
 
@@ -189,6 +220,15 @@ final class BenchmarkGoldenFileTests: XCTestCase {
                 chip: "Test Chip", model: "Test1,1", performanceCores: 4, efficiencyCores: 4,
                 memoryBytes: 16_000_000_000, osVersion: "15.0", osBuild: "24A000"),
             createdAtNs: 123_456_789,
+            provenance: BenchmarkProvenance(
+                toolVersion: "0.1.0", adapterVersion: "0.1.0", runtimeVersion: "0.24.0",
+                modelRevision: "fixture-revision",
+                // SHA-256("synthetic model artifact fixture")
+                modelArtifactSHA256:
+                    "963f9166bacc92840908c6e0d15752306f9e30720216f8fa5ea0c829b0cd123d",
+                // SHA-256("synthetic dependency lock fixture")
+                dependencyLockSHA256:
+                    "eb380ca914d512ec6d13c4d7543b1e6334334333a0f733819c34472b576baae2"),
             measuredRunsByContext: [
                 128: [run(context: 128, index: 0), run(context: 128, index: 1)],
                 512: [run(context: 512, index: 0), run(context: 512, index: 1)],
@@ -218,5 +258,23 @@ final class BenchmarkGoldenFileTests: XCTestCase {
         XCTAssertEqual(decoded, report)
         XCTAssertEqual(decoded.contexts.map(\.contextTokens), [128, 512])
         XCTAssertEqual(decoded.contexts[0].ttftMs.count, 2)
+    }
+
+    func testReportDecoderRejectsHiddenUnknownFields() throws {
+        var root = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: BenchmarkAssembler.encode(syntheticReport()))
+                as? [String: Any])
+        root["hiddenPrompt"] = "must not be silently ignored"
+        XCTAssertThrowsError(
+            try BenchmarkAssembler.decode(JSONSerialization.data(withJSONObject: root)))
+    }
+
+    func testReportFileDecoderRejectsSymlinks() throws {
+        let link = FileManager.default.temporaryDirectory
+            .appendingPathComponent("loupe-report-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: link) }
+        try FileManager.default.createSymbolicLink(
+            at: link, withDestinationURL: Self.goldenURL)
+        XCTAssertThrowsError(try BenchmarkAssembler.decode(contentsOf: link))
     }
 }

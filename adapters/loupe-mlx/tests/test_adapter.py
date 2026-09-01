@@ -8,7 +8,6 @@ import os
 import time
 
 import pytest
-
 from loupe_mlx.events import decode_line
 
 mlx_lm = pytest.importorskip("mlx_lm")

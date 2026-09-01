@@ -1,7 +1,7 @@
 import Darwin
 import Foundation
 
-/// Client half of the adapter → daemon socket: best-effort line writer.
+/// Client half of the adapter → user app socket: best-effort line writer.
 /// Writes are synchronous, which is fine here and only here: this executable
 /// emits a request's whole trace after the stream completes, so a slow write
 /// never sits inside a generation loop (the in-process Python adapter uses a
@@ -9,6 +9,7 @@ import Foundation
 /// and the drop counter goes through `lock`.
 public final class UnixSocketLineWriter: @unchecked Sendable {
     private let lock = NSLock()
+    private let socketPath: String
     private var fd: Int32 = -1
     private var droppedCount = 0
 
@@ -17,14 +18,55 @@ public final class UnixSocketLineWriter: @unchecked Sendable {
     }
 
     public init(socketPath: String) {
+        self.socketPath = socketPath
+        lock.withLock { _ = connectLocked() }
+    }
+
+    public func send(_ line: Data) {
+        lock.withLock {
+            var payload = line
+            payload.append(UInt8(ascii: "\n"))
+            if fd < 0 { _ = connectLocked() }
+            if fd >= 0, writeAllLocked(payload) { return }
+
+            // A short write leaves only an unterminated fragment on the old
+            // connection. Reconnect once and replay the complete line so
+            // startup races and app restarts do not silently lose the
+            // session_start that makes every later event meaningful.
+            disconnectLocked()
+            if connectLocked(), writeAllLocked(payload) { return }
+            disconnectLocked()
+            droppedCount += 1
+        }
+    }
+
+    public func close() {
+        lock.withLock { disconnectLocked() }
+    }
+
+    private func connectLocked() -> Bool {
+        if fd >= 0 { return true }
         let socketFD = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard socketFD >= 0 else { return }
+        guard socketFD >= 0 else { return false }
+        var enabled: Int32 = 1
+        guard
+            setsockopt(
+                socketFD, SOL_SOCKET, SO_NOSIGPIPE, &enabled,
+                socklen_t(MemoryLayout<Int32>.size)) == 0
+        else {
+            Darwin.close(socketFD)
+            return false
+        }
+        var timeout = timeval(tv_sec: 1, tv_usec: 0)
+        _ = setsockopt(
+            socketFD, SOL_SOCKET, SO_SNDTIMEO, &timeout,
+            socklen_t(MemoryLayout<timeval>.size))
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
         let pathBytes = Array(socketPath.utf8)
         guard pathBytes.count < MemoryLayout.size(ofValue: address.sun_path) else {
-            close(socketFD)
-            return
+            Darwin.close(socketFD)
+            return false
         }
         withUnsafeMutableBytes(of: &address.sun_path) { raw in
             raw.copyBytes(from: pathBytes)
@@ -36,41 +78,35 @@ public final class UnixSocketLineWriter: @unchecked Sendable {
         }
         if connected == 0 {
             fd = socketFD
+            return true
         } else {
-            close(socketFD)
+            Darwin.close(socketFD)
+            return false
         }
     }
 
-    public func send(_ line: Data) {
-        lock.withLock {
-            guard fd >= 0 else {
-                droppedCount += 1
-                return
+    private func writeAllLocked(_ payload: Data) -> Bool {
+        payload.withUnsafeBytes { raw in
+            guard let base = raw.baseAddress else { return true }
+            var offset = 0
+            while offset < raw.count {
+                let written = Darwin.write(fd, base.advanced(by: offset), raw.count - offset)
+                if written > 0 {
+                    offset += written
+                } else if written < 0, errno == EINTR {
+                    continue
+                } else {
+                    return false
+                }
             }
-            var payload = line
-            payload.append(UInt8(ascii: "\n"))
-            let written = payload.withUnsafeBytes { raw in
-                write(fd, raw.baseAddress, raw.count)
-            }
-            if written != payload.count {
-                droppedCount += 1
-                close(fd)
-                fd = -1
-            }
+            return true
         }
     }
 
-    public func close() {
-        lock.withLock {
-            if fd >= 0 {
-                Darwin.close(fd)
-                fd = -1
-            }
-        }
-    }
-
-    private func close(_ descriptor: Int32) {
-        Darwin.close(descriptor)
+    private func disconnectLocked() {
+        guard fd >= 0 else { return }
+        Darwin.close(fd)
+        fd = -1
     }
 }
 
@@ -81,30 +117,38 @@ public actor MetricsPoller {
     public private(set) var latest: [String: Double] = [:]
     public private(set) var maxima: [String: Double] = [:]
     private let url: URL
+    private let session: URLSession
     private var task: Task<Void, Never>?
 
-    public init(url: URL) {
+    public init(url: URL, session: URLSession = AdapterHTTP.session()) {
         self.url = url
+        self.session = session
     }
 
     deinit {
-        // `start`'s task captures self; without this, an abandoned poller
-        // polls forever.
+        // Defensive cancellation; the task captures this actor weakly so an
+        // abandoned poller can deinitialize even after a request fails.
         task?.cancel()
     }
 
     public func start(intervalMs: Int = 100) {
         stop()
         let url = url
-        task = Task {
+        let session = session
+        let cadence = max(50, min(intervalMs, 5_000))
+        task = Task { [weak self] in
             while !Task.isCancelled {
-                if let (data, _) = try? await URLSession.shared.data(from: url) {
+                if let (data, response) = try? await AdapterHTTP.boundedData(
+                    from: url, session: session,
+                    maximumBytes: AdapterHTTP.maxMetadataBytes),
+                    AdapterHTTP.isSuccessful(response)
+                {
                     let parsed = PrometheusParser.parse(String(decoding: data, as: UTF8.self))
                     if !parsed.isEmpty {
-                        self.record(parsed)
+                        await self?.record(parsed)
                     }
                 }
-                try? await Task.sleep(for: .milliseconds(intervalMs))
+                try? await Task.sleep(for: .milliseconds(cadence))
             }
         }
     }
@@ -119,5 +163,76 @@ public actor MetricsPoller {
         for (name, value) in parsed {
             maxima[name] = max(maxima[name] ?? -.infinity, value)
         }
+    }
+}
+
+public enum AdapterHTTP {
+    public static let maxMetadataBytes = 1_048_576
+    public static let maxStreamBytes = 16_777_216
+    public static let maxLineBytes = 65_536
+
+    public static func session() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 15
+        configuration.timeoutIntervalForResource = 300
+        configuration.httpMaximumConnectionsPerHost = 2
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        // A loopback URL that redirects to a remote origin would otherwise
+        // exfiltrate the prompt despite the CLI's initial host allow-list.
+        // Disable both redirects and configured proxies for this local-only
+        // adapter rather than attempting to validate after transmission.
+        configuration.connectionProxyDictionary = [:]
+        return URLSession(
+            configuration: configuration,
+            delegate: LocalOnlySessionDelegate(),
+            delegateQueue: nil)
+    }
+
+    public static func isSuccessful(_ response: URLResponse) -> Bool {
+        guard let http = response as? HTTPURLResponse else { return false }
+        return (200..<300).contains(http.statusCode)
+    }
+
+    /// URLSession's convenience `data` API buffers the entire response
+    /// before a caller can inspect its length. Consume the async byte stream
+    /// instead so a hostile local server cannot exceed the declared cap.
+    public static func boundedData(
+        from url: URL, session: URLSession, maximumBytes: Int
+    ) async throws -> (Data, URLResponse) {
+        guard maximumBytes > 0 else { throw AdapterHTTPError.responseTooLarge }
+        let (bytes, response) = try await session.bytes(from: url)
+        if response.expectedContentLength > Int64(maximumBytes) {
+            throw AdapterHTTPError.responseTooLarge
+        }
+        var data = Data()
+        data.reserveCapacity(
+            response.expectedContentLength > 0
+                ? min(Int(response.expectedContentLength), maximumBytes)
+                : min(16_384, maximumBytes))
+        for try await byte in bytes {
+            guard data.count < maximumBytes else {
+                throw AdapterHTTPError.responseTooLarge
+            }
+            data.append(byte)
+        }
+        return (data, response)
+    }
+}
+
+public enum AdapterHTTPError: Error {
+    case responseTooLarge
+}
+
+final class LocalOnlySessionDelegate: NSObject, URLSessionTaskDelegate,
+    @unchecked Sendable
+{
+    func urlSession(
+        _ session: URLSession, task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
     }
 }

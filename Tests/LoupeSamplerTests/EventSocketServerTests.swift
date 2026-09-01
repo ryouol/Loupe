@@ -6,9 +6,12 @@ import XCTest
 @testable import LoupeSampler
 
 final class EventSocketServerTests: XCTestCase {
-    private var socketPath: String {
-        // sockaddr_un caps paths at ~104 bytes; keep it short.
-        "/tmp/loupe-test-\(UInt32.random(in: 0..<UInt32.max)).sock"
+    private func socketFixture() throws -> (directory: URL, path: String) {
+        // sockaddr_un caps paths at ~104 bytes; keep it short and private.
+        let directory = URL(fileURLWithPath: "/tmp/loupe-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        XCTAssertEqual(chmod(directory.path, S_IRWXU), 0)
+        return (directory, directory.appendingPathComponent("adapter.sock").path)
     }
 
     private func connect(to path: String) throws -> Int32 {
@@ -35,7 +38,9 @@ final class EventSocketServerTests: XCTestCase {
     }
 
     func testValidLinesFlowAndMalformedLinesDrop() async throws {
-        let path = socketPath
+        let fixture = try socketFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let path = fixture.path
         let server = EventSocketServer(socketPath: path)
         let stream = try await server.start()
         defer { Task { await server.stop() } }
@@ -68,7 +73,9 @@ final class EventSocketServerTests: XCTestCase {
     }
 
     func testPartialWritesReassembleAcrossReads() async throws {
-        let path = socketPath
+        let fixture = try socketFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let path = fixture.path
         let server = EventSocketServer(socketPath: path)
         let stream = try await server.start()
         defer { Task { await server.stop() } }
@@ -91,7 +98,9 @@ final class EventSocketServerTests: XCTestCase {
     }
 
     func testUnterminatedFloodIsBoundedAndDropped() async throws {
-        let path = socketPath
+        let fixture = try socketFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let path = fixture.path
         let server = EventSocketServer(socketPath: path)
         _ = try await server.start()
         defer { Task { await server.stop() } }
@@ -118,5 +127,54 @@ final class EventSocketServerTests: XCTestCase {
         } catch {
             // Expected: the daemon logs this and degrades to XPC-only.
         }
+    }
+
+    func testSocketAndParentPermissionsArePrivate() async throws {
+        let fixture = try socketFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let server = EventSocketServer(socketPath: fixture.path)
+        _ = try await server.start()
+        defer { Task { await server.stop() } }
+
+        var socketMetadata = stat()
+        XCTAssertEqual(lstat(fixture.path, &socketMetadata), 0)
+        XCTAssertEqual(socketMetadata.st_mode & 0o777, 0o600)
+        var directoryMetadata = stat()
+        XCTAssertEqual(lstat(fixture.directory.path, &directoryMetadata), 0)
+        XCTAssertEqual(directoryMetadata.st_mode & 0o777, 0o700)
+    }
+
+    func testRefusesWorldReadableParentDirectory() async {
+        let server = EventSocketServer(socketPath: "/tmp/loupe-unsafe.sock")
+        do {
+            _ = try await server.start()
+            XCTFail("world-writable parent must be rejected")
+        } catch let error as EventSocketServer.SocketError {
+            guard case .unsafeParentDirectory = error else {
+                XCTFail("unexpected error: \(error)")
+                return
+            }
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    func testSecondServerCannotUnlinkLiveSocket() async throws {
+        let fixture = try socketFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let first = EventSocketServer(socketPath: fixture.path)
+        _ = try await first.start()
+        defer { Task { await first.stop() } }
+
+        let second = EventSocketServer(socketPath: fixture.path)
+        do {
+            _ = try await second.start()
+            XCTFail("a live listener must retain ownership of its socket")
+        } catch let error as EventSocketServer.SocketError {
+            XCTAssertEqual(error, .socketInUse(fixture.path))
+        }
+
+        let descriptor = try connect(to: fixture.path)
+        close(descriptor)
     }
 }

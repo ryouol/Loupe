@@ -10,6 +10,8 @@ import Observation
 public final class DaemonViewModel {
     private let client: any DaemonServiceClient
     private var streamTask: Task<Void, Never>?
+    private var activeConnection: DaemonXPCClient?
+    private var streamGeneration = 0
 
     public private(set) var status: DaemonStatus
     public private(set) var lastActionError: String?
@@ -23,13 +25,14 @@ public final class DaemonViewModel {
     }
 
     public var isObservedMode: Bool { status != .enabled }
+    public var installationBlocker: String? { client.installationBlocker() }
 
     public var statusLabel: String {
         switch status {
         case .notRegistered: return "Not installed"
         case .requiresApproval: return "Waiting for approval in System Settings"
         case .enabled: return "Running"
-        case .notFound: return "Daemon missing from app bundle"
+        case .notFound: return "Helper missing from app bundle"
         case .unknown(let detail): return "Unknown status (\(detail))"
         }
     }
@@ -41,11 +44,17 @@ public final class DaemonViewModel {
         status = client.status()
         if status == .enabled {
             startStreaming()
+        } else {
+            stopStreaming()
         }
     }
 
     public func install() {
         lastActionError = nil
+        if let installationBlocker {
+            lastActionError = installationBlocker
+            return
+        }
         do {
             try client.register()
         } catch {
@@ -70,24 +79,50 @@ public final class DaemonViewModel {
 
     public func startStreaming() {
         guard streamTask == nil, let connection = client.makeConnection() else { return }
+        lastActionError = nil
+        streamGeneration += 1
+        let generation = streamGeneration
+        activeConnection = connection
         let stream = connection.activate()
         streamTask = Task { [weak self] in
-            self?.handshake = await connection.handshake()
+            guard let handshake = await connection.handshake(),
+                handshake.protocolVersion == EventProtocol.version,
+                !Task.isCancelled,
+                self?.streamGeneration == generation
+            else {
+                if !Task.isCancelled, self?.streamGeneration == generation {
+                    self?.lastActionError =
+                        "The helper did not complete the protocol handshake; local mode remains available."
+                }
+                connection.stopAndInvalidate()
+                self?.finishStreaming(generation: generation)
+                return
+            }
+            self?.handshake = handshake
             connection.startStream()
             for await sample in stream {
-                guard let self, !Task.isCancelled else { break }
+                guard let self, !Task.isCancelled, streamGeneration == generation else { break }
                 self.latestSample = sample
                 self.samplesReceived += 1
             }
             connection.stopAndInvalidate()
             // Stream ended (daemon died or connection dropped): clear so a
             // later refresh can reconnect instead of being stuck forever.
-            self?.streamTask = nil
+            self?.finishStreaming(generation: generation)
         }
     }
 
     public func stopStreaming() {
+        streamGeneration += 1
+        activeConnection?.stopAndInvalidate()
+        activeConnection = nil
         streamTask?.cancel()
+        streamTask = nil
+    }
+
+    private func finishStreaming(generation: Int) {
+        guard streamGeneration == generation else { return }
+        activeConnection = nil
         streamTask = nil
     }
 }

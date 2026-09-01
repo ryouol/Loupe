@@ -32,7 +32,7 @@ public final class ResultsViewModel {
 
     public func load(url: URL) {
         do {
-            let decoded = try BenchmarkAssembler.decode(Data(contentsOf: url))
+            let decoded = try BenchmarkAssembler.decode(contentsOf: url)
             report = decoded
             reportName = url.deletingPathExtension().lastPathComponent
             sweep = decoded.contexts.map {

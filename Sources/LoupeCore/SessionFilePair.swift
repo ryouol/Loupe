@@ -4,6 +4,19 @@ import Foundation
 public enum LoupeEnvironment {
     /// Base path of a session pair to open at launch (`make replay`).
     public static let replaySessionVariable = "LOUPE_REPLAY_FIXTURE"
+    /// User-owned adapter ingest socket. Runtime adapters may override this
+    /// when driving a specific recording instance.
+    public static let adapterSocketVariable = "LOUPE_SOCKET_PATH"
+    /// Optional run identifier shared with adapters launched by a user.
+    public static let runIDVariable = "LOUPE_RUN_ID"
+}
+
+/// Filenames inside the per-user Application Support directory. The app is
+/// the only component that resolves the directory; LoupeCore remains I/O-free.
+public enum LoupeUserRuntime {
+    public static let directoryName = "runtime"
+    public static let adapterSocketName = "adapter.sock"
+    public static let sessionsDirectoryName = "sessions"
 }
 
 /// A recorded session is a file pair: `<base>.ndjson` (protocol events) and

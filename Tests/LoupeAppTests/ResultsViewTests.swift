@@ -16,7 +16,7 @@ final class ResultsViewTests: XCTestCase {
         .deletingLastPathComponent()
         .appendingPathComponent("fixtures/benchmark-baseline.report.json")
 
-    func testViewModelDerivesSweepFromRealReport() {
+    func testViewModelDerivesSweepFromHistoricalViewOnlyReport() {
         let model = ResultsViewModel()
         model.load(url: Self.reportURL)
 
@@ -31,6 +31,7 @@ final class ResultsViewTests: XCTestCase {
         XCTAssertLessThan(model.sweep[0].ttft.p50, model.sweep[1].ttft.p50)
         XCTAssertEqual(model.runRows.count, 4)
         XCTAssertEqual(model.reportName, "benchmark-baseline.report")
+        XCTAssertFalse(model.report?.validationFailures.isEmpty ?? true)
     }
 
     func testViewModelSurfacesUnreadableReport() {

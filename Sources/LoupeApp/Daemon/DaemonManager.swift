@@ -1,6 +1,7 @@
 import Foundation
 import LoupeCore
 import LoupeSampler
+import Security
 import ServiceManagement
 
 public enum DaemonStatus: Sendable, Equatable {
@@ -19,6 +20,11 @@ public protocol DaemonServiceClient: Sendable {
     func openApprovalSettings()
     /// nil = unreachable; callers treat that as observed mode, not an error.
     func makeConnection() -> DaemonXPCClient?
+    func installationBlocker() -> String?
+}
+
+extension DaemonServiceClient {
+    public func installationBlocker() -> String? { nil }
 }
 
 public struct SMAppServiceDaemonClient: DaemonServiceClient {
@@ -39,6 +45,9 @@ public struct SMAppServiceDaemonClient: DaemonServiceClient {
     }
 
     public func register() throws {
+        if let blocker = installationBlocker() {
+            throw DaemonInstallationError.blocked(blocker)
+        }
         try service.register()
     }
 
@@ -53,5 +62,44 @@ public struct SMAppServiceDaemonClient: DaemonServiceClient {
     public func makeConnection() -> DaemonXPCClient? {
         guard case .enabled = status() else { return nil }
         return DaemonXPCClient()
+    }
+
+    public func installationBlocker() -> String? {
+        guard Self.currentTeamIdentifier() != nil else {
+            return "The optional root helper requires an Apple-team-signed build. "
+                + "This unsigned development build remains fully usable in local mode."
+        }
+        return nil
+    }
+
+    private static func currentTeamIdentifier() -> String? {
+        var code: SecStaticCode?
+        guard
+            SecStaticCodeCreateWithPath(
+                Bundle.main.bundleURL as CFURL, SecCSFlags(), &code) == errSecSuccess,
+            let code
+        else { return nil }
+        var information: CFDictionary?
+        guard
+            SecCodeCopySigningInformation(
+                code, SecCSFlags(rawValue: kSecCSSigningInformation), &information)
+                == errSecSuccess,
+            let dictionary = information as? [String: Any]
+        else { return nil }
+        guard let identifier = dictionary[kSecCodeInfoTeamIdentifier as String] as? String,
+            identifier.count == 10,
+            identifier.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) })
+        else { return nil }
+        return identifier
+    }
+}
+
+public enum DaemonInstallationError: LocalizedError {
+    case blocked(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .blocked(let detail): return detail
+        }
     }
 }

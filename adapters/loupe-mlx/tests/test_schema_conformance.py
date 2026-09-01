@@ -4,7 +4,6 @@ import json
 
 import pytest
 from jsonschema import Draft202012Validator
-
 from loupe_mlx.events import (
     REQUEST_SCOPED_EVENTS,
     ClockSync,

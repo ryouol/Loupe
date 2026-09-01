@@ -19,15 +19,16 @@ public struct Timebase: Sendable, Equatable {
         return Timebase(numer: info.numer, denom: info.denom)
     }
 
-    /// Exact floor(ticks·numer/denom); split at the division to avoid the
-    /// naive overflow (safe past ~590 years of uptime on Apple Silicon).
+    /// Exact floor(ticks·numer/denom) while the result fits UInt64, otherwise
+    /// saturated. The full-width product avoids the naive multiplication
+    /// overflow (and makes injected/test ratios safe as well as live ones).
     public func nanoseconds(fromTicks ticks: UInt64) -> UInt64 {
         let n = UInt64(numer)
         let d = UInt64(denom)
         if n == d { return ticks }
-        let quotient = ticks / d
-        let remainder = ticks % d
-        return quotient * n + (remainder * n) / d
+        let product = ticks.multipliedFullWidth(by: n)
+        guard product.high < d else { return UInt64.max }
+        return d.dividingFullWidth(product).quotient
     }
 
     /// The one live clock read; everything else takes ticks as data.
@@ -79,8 +80,12 @@ public struct ClockSyncSample: Sendable, Equatable {
         let upstream = Int64(bitPattern: t1 &- t0)
         let downstream = Int64(bitPattern: t2 &- t3)
         let roundTrip = localSpan - remoteSpan
+        // Compute (upstream + downstream) / 2 without overflowing when a
+        // hostile clock sample places both deltas near an Int64 boundary.
+        let averageOffset =
+            upstream / 2 + downstream / 2 + (upstream % 2 + downstream % 2) / 2
         return ClockOffsetEstimate(
-            offsetNs: (upstream + downstream) / 2,
+            offsetNs: averageOffset,
             uncertaintyNs: UInt64(roundTrip) / 2
         )
     }

@@ -56,7 +56,9 @@ final class LoupeAppTests: XCTestCase {
             .write(toFile: base + ".system.ndjson", atomically: true, encoding: .utf8)
         let eventLines = [
             #"{"v":1,"ts":1000,"runId":"r","event":"session_start","payload":{"adapter":"a","adapterVersion":"1","runtime":"mlx","pid":9}}"#,
-            #"{"v":1,"ts":1100,"runId":"r","requestId":"q-1","event":"decode_tick","payload":{"outputTokens":1,"kvCacheBytes":2,"activeMemoryBytes":3}}"#,
+            #"{"v":1,"ts":1050,"runId":"r","requestId":"q-1","event":"request_start","payload":{"promptTokens":1}}"#,
+            #"{"v":1,"ts":1100,"runId":"r","requestId":"q-1","event":"prefill_end","payload":{"promptTokens":1}}"#,
+            #"{"v":1,"ts":1150,"runId":"r","requestId":"q-1","event":"decode_tick","payload":{"outputTokens":1,"kvCacheBytes":2,"activeMemoryBytes":3}}"#,
             #"{"v":1,"ts":1200,"runId":"r","requestId":"q-1","event":"request_end","payload":{"outputTokens":1,"finishReason":"stop"}}"#,
         ]
         try eventLines.joined(separator: "\n")
@@ -67,11 +69,16 @@ final class LoupeAppTests: XCTestCase {
 
         XCTAssertTrue(model.isLoaded)
         XCTAssertEqual(model.samples.count, 5)
-        XCTAssertEqual(model.totalEventCount, 3)
+        XCTAssertEqual(model.totalEventCount, 5)
         XCTAssertEqual(model.decodeTickCount, 1)
-        XCTAssertEqual(model.milestones.count, 2)
+        XCTAssertEqual(model.milestones.count, 4)
         XCTAssertEqual(model.chartPoints.count, 5)
         XCTAssertEqual(model.thermalStatesSeen, [.nominal])
+        _ = try model.evidenceJSON()
+
+        try (eventLines.joined(separator: "\n") + "\n")
+            .write(toFile: base + ".ndjson", atomically: true, encoding: .utf8)
+        XCTAssertThrowsError(try model.evidenceJSON())
     }
 
     func testViewModelSurfacesMissingFixture() async {
@@ -79,5 +86,48 @@ final class LoupeAppTests: XCTestCase {
         await model.load()
         XCTAssertFalse(model.isLoaded)
         XCTAssertNotNil(model.loadFailure)
+    }
+
+    func testBundledSampleLoadsAndExportsHashedEvidence() async throws {
+        let base = try XCTUnwrap(SampleSession.basePath())
+        let model = ReplayViewModel(basePath: base)
+        await model.load()
+        XCTAssertTrue(model.isLoaded, model.loadFailure ?? "sample load failed")
+        XCTAssertEqual(model.eventDrops, 0)
+        XCTAssertEqual(model.sampleDrops, 0)
+        XCTAssertGreaterThanOrEqual(model.requestMetrics.count, 2)
+
+        let report = try JSONDecoder().decode(
+            SessionEvidenceReport.self, from: model.evidenceJSON())
+        XCTAssertEqual(report.schemaVersion, 1)
+        XCTAssertEqual(report.eventSource.sha256.count, 64)
+        XCTAssertEqual(report.telemetrySource.sha256.count, 64)
+        XCTAssertEqual(report.eventCount, 16)
+        XCTAssertEqual(report.sampleCount, 20)
+        XCTAssertTrue(try model.evidenceCSV().contains("request,q-1"))
+    }
+
+    func testEvidenceCSVNeutralizesSpreadsheetFormulaCells() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("loupe-evidence-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let base = directory.appendingPathComponent("formula").path
+        let events = [
+            #"{"v":1,"ts":1000,"runId":"r","event":"session_start","payload":{"adapter":"a","adapterVersion":"1","runtime":"mlx","pid":9}}"#,
+            #"{"v":1,"ts":1010,"runId":"r","requestId":"\t=2+2","event":"request_start","payload":{"promptTokens":1}}"#,
+            #"{"v":1,"ts":1020,"runId":"r","requestId":"\t=2+2","event":"prefill_end","payload":{"promptTokens":1}}"#,
+            #"{"v":1,"ts":1030,"runId":"r","requestId":"\t=2+2","event":"request_end","payload":{"outputTokens":1,"finishReason":"stop"}}"#,
+        ]
+        try events.joined(separator: "\n")
+            .write(toFile: base + ".ndjson", atomically: true, encoding: .utf8)
+        try
+            #"{"system":{"ts":1000,"thermalState":"nominal","memoryUsedBytes":100,"memoryFreeBytes":50,"swapUsedBytes":0},"process":null}"#
+            .write(toFile: base + ".system.ndjson", atomically: true, encoding: .utf8)
+
+        let model = ReplayViewModel(basePath: base)
+        await model.load()
+        XCTAssertTrue(model.isLoaded)
+        XCTAssertTrue(try model.evidenceCSV().contains("request,'\t=2+2"))
     }
 }

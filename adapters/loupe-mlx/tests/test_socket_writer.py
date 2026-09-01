@@ -1,8 +1,10 @@
+import os
 import socket
 import threading
 import time
 import uuid
 
+import pytest
 from loupe_mlx.events import Envelope, ModelLoadStart, decode_line
 from loupe_mlx.socket_writer import SocketEventWriter
 
@@ -44,6 +46,9 @@ def _envelope(ts: int) -> Envelope:
 def test_events_arrive_in_order() -> None:
     server = UnixLineServer()
     writer = SocketEventWriter(server.path)
+    deadline = time.monotonic() + 2
+    while not writer.connected and time.monotonic() < deadline:
+        time.sleep(0.005)
     assert writer.connected
     for ts in range(1, 51):
         writer.emit(_envelope(ts))
@@ -64,23 +69,35 @@ def test_missing_daemon_degrades_to_counted_drops() -> None:
     assert writer.dropped == 10
 
 
-def test_file_writer_feeds_the_same_instrument() -> None:
+def test_file_writer_feeds_the_same_instrument(tmp_path) -> None:
     # The recorder/bench path: LoupeInstrument with a file sink must produce
     # a decodable stream starting with session_start + clock_sync, without
     # mlx installed (instrument construction imports nothing heavy).
-    import tempfile
-
     from loupe_mlx import LoupeInstrument
     from loupe_mlx.socket_writer import FileEventWriter
 
-    path = tempfile.mktemp(suffix=".ndjson")
-    loupe = LoupeInstrument(run_id="r-file", writer=FileEventWriter(path))
+    path = tmp_path / "events.ndjson"
+    loupe = LoupeInstrument(run_id="r-file", writer=FileEventWriter(str(path)))
     loupe.close()
 
-    lines = open(path, "rb").read().splitlines()
+    lines = path.read_bytes().splitlines()
     decoded = [decode_line(line) for line in lines]
     assert [envelope.event for envelope in decoded] == ["session_start", "clock_sync"]
     assert all(envelope.run_id == "r-file" for envelope in decoded)
+    assert os.stat(path).st_mode & 0o777 == 0o600
+
+
+def test_file_writer_rejects_symlink_without_touching_target(tmp_path) -> None:
+    from loupe_mlx.socket_writer import FileEventWriter
+
+    target = tmp_path / "target.ndjson"
+    target.write_bytes(b"keep me")
+    link = tmp_path / "output.ndjson"
+    link.symlink_to(target)
+
+    with pytest.raises(OSError):
+        FileEventWriter(str(link))
+    assert target.read_bytes() == b"keep me"
 
 
 def test_emit_never_blocks_even_when_queue_is_full() -> None:
@@ -94,3 +111,32 @@ def test_emit_never_blocks_even_when_queue_is_full() -> None:
     writer.close()
     assert elapsed < 1.0, f"10k emits took {elapsed:.2f}s — emit is blocking"
     assert writer.dropped > 0
+
+
+def test_emit_after_close_is_counted() -> None:
+    writer = SocketEventWriter("/tmp/loupe-closed-writer.sock", max_queued=8)
+    writer.close()
+    before = writer.dropped
+    writer.emit(_envelope(1))
+    assert writer.dropped == before + 1
+
+
+def test_writer_reconnects_after_listener_appears() -> None:
+    path = f"/tmp/loupe-pytest-{uuid.uuid4().hex[:8]}.sock"
+    writer = SocketEventWriter(path)
+    writer.emit(_envelope(1))
+    time.sleep(0.55)
+    server = UnixLineServer.__new__(UnixLineServer)
+    server.path = path
+    server.lines = []
+    server._server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server._server.bind(path)
+    server._server.listen(1)
+    server._thread = threading.Thread(target=server._serve, daemon=True)
+    server._thread.start()
+
+    writer.emit(_envelope(2))
+    server.wait_for(2)
+    writer.close()
+    assert [decode_line(line).ts for line in server.lines] == [1, 2]
+    assert writer.dropped == 0

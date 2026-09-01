@@ -3,7 +3,7 @@ import LoupeCore
 /// Between benchmark runs the machine must return to thermal nominal or the
 /// next run measures the previous run's heat. The gate must never hang: a
 /// machine that won't cool (small chassis, hot room) times out cleanly and
-/// the report proceeds with that fact on record.
+/// the benchmark harness refuses to publish a compromised report.
 public enum CooldownGate {
     public enum Outcome: Sendable, Equatable {
         case nominal

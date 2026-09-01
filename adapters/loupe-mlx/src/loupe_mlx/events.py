@@ -15,6 +15,9 @@ PROTOCOL_VERSION = 1
 # Shared with the schema (x-limits.maxLineBytes) and the Swift decoder;
 # conformance tests in both languages pin the three together.
 MAX_LINE_BYTES = 65536
+MAX_UINT32 = 2**32 - 1
+MAX_UINT64 = 2**64 - 1
+MAX_PID = 2**31 - 1
 
 
 class DropReason(str, Enum):
@@ -59,18 +62,30 @@ def _req_str(obj: dict[str, Any], key: str) -> str:
     return value
 
 
-def _req_uint(obj: dict[str, Any], key: str) -> int:
-    value = obj.get(key)
-    # bool is an int subclass; True would otherwise pass as 1.
-    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-        raise _payload_error(f"{key} must be a non-negative integer")
+def _bounded_str(obj: dict[str, Any], key: str, maximum: int, *, allow_empty: bool = False) -> str:
+    value = _req_str(obj, key)
+    if (not allow_empty and not value) or len(value) > maximum:
+        raise _payload_error(f"{key} length")
     return value
 
 
-def _opt_uint(obj: dict[str, Any], key: str) -> int | None:
+def _reject_extra_keys(obj: dict[str, Any], allowed: set[str]) -> None:
+    if not set(obj).issubset(allowed):
+        raise _payload_error("unknown field")
+
+
+def _req_uint(obj: dict[str, Any], key: str, maximum: int = MAX_UINT64) -> int:
+    value = obj.get(key)
+    # bool is an int subclass; True would otherwise pass as 1.
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0 or value > maximum:
+        raise _payload_error(f"{key} must be an unsigned integer up to {maximum}")
+    return value
+
+
+def _opt_uint(obj: dict[str, Any], key: str, maximum: int = MAX_UINT64) -> int | None:
     if key not in obj or obj[key] is None:
         return None
-    return _req_uint(obj, key)
+    return _req_uint(obj, key, maximum)
 
 
 def _req_bool(obj: dict[str, Any], key: str) -> bool:
@@ -98,11 +113,15 @@ class SessionStart:
 
     @classmethod
     def from_json_payload(cls, obj: dict[str, Any]) -> "SessionStart":
+        _reject_extra_keys(obj, {"adapter", "adapterVersion", "runtime", "pid"})
+        pid = _req_uint(obj, "pid", MAX_PID)
+        if pid == 0:
+            raise _payload_error("pid")
         return cls(
-            adapter=_req_str(obj, "adapter"),
-            adapter_version=_req_str(obj, "adapterVersion"),
-            runtime=_req_str(obj, "runtime"),
-            pid=_req_uint(obj, "pid"),
+            adapter=_bounded_str(obj, "adapter", 256),
+            adapter_version=_bounded_str(obj, "adapterVersion", 128),
+            runtime=_bounded_str(obj, "runtime", 128),
+            pid=pid,
         )
 
 
@@ -119,6 +138,7 @@ class ClockSync:
 
     @classmethod
     def from_json_payload(cls, obj: dict[str, Any]) -> "ClockSync":
+        _reject_extra_keys(obj, {"t0", "t1", "t2", "t3"})
         return cls(
             t0=_req_uint(obj, "t0"),
             t1=_req_uint(obj, "t1"),
@@ -137,7 +157,8 @@ class ModelLoadStart:
 
     @classmethod
     def from_json_payload(cls, obj: dict[str, Any]) -> "ModelLoadStart":
-        return cls(model_id=_req_str(obj, "modelId"))
+        _reject_extra_keys(obj, {"modelId"})
+        return cls(model_id=_bounded_str(obj, "modelId", 1024))
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,8 +176,9 @@ class ModelLoadEnd:
 
     @classmethod
     def from_json_payload(cls, obj: dict[str, Any]) -> "ModelLoadEnd":
+        _reject_extra_keys(obj, {"modelId", "ok", "weightsBytes"})
         return cls(
-            model_id=_req_str(obj, "modelId"),
+            model_id=_bounded_str(obj, "modelId", 1024),
             ok=_req_bool(obj, "ok"),
             weights_bytes=_opt_uint(obj, "weightsBytes"),
         )
@@ -174,7 +196,8 @@ class RequestStart:
 
     @classmethod
     def from_json_payload(cls, obj: dict[str, Any]) -> "RequestStart":
-        return cls(prompt_tokens=_opt_uint(obj, "promptTokens"))
+        _reject_extra_keys(obj, {"promptTokens"})
+        return cls(prompt_tokens=_opt_uint(obj, "promptTokens", MAX_UINT32))
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,7 +210,8 @@ class PrefillEnd:
 
     @classmethod
     def from_json_payload(cls, obj: dict[str, Any]) -> "PrefillEnd":
-        return cls(prompt_tokens=_req_uint(obj, "promptTokens"))
+        _reject_extra_keys(obj, {"promptTokens"})
+        return cls(prompt_tokens=_req_uint(obj, "promptTokens", MAX_UINT32))
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,8 +230,9 @@ class DecodeTick:
 
     @classmethod
     def from_json_payload(cls, obj: dict[str, Any]) -> "DecodeTick":
+        _reject_extra_keys(obj, {"outputTokens", "kvCacheBytes", "activeMemoryBytes"})
         return cls(
-            output_tokens=_req_uint(obj, "outputTokens"),
+            output_tokens=_req_uint(obj, "outputTokens", MAX_UINT32),
             kv_cache_bytes=_req_uint(obj, "kvCacheBytes"),
             active_memory_bytes=_req_uint(obj, "activeMemoryBytes"),
         )
@@ -224,9 +249,10 @@ class RequestEnd:
 
     @classmethod
     def from_json_payload(cls, obj: dict[str, Any]) -> "RequestEnd":
+        _reject_extra_keys(obj, {"outputTokens", "finishReason"})
         return cls(
-            output_tokens=_req_uint(obj, "outputTokens"),
-            finish_reason=_req_str(obj, "finishReason"),
+            output_tokens=_req_uint(obj, "outputTokens", MAX_UINT32),
+            finish_reason=_bounded_str(obj, "finishReason", 64),
         )
 
 
@@ -241,7 +267,11 @@ class ErrorEvent:
 
     @classmethod
     def from_json_payload(cls, obj: dict[str, Any]) -> "ErrorEvent":
-        return cls(code=_req_str(obj, "code"), message=_req_str(obj, "message"))
+        _reject_extra_keys(obj, {"code", "message"})
+        return cls(
+            code=_bounded_str(obj, "code", 128),
+            message=_bounded_str(obj, "message", 4096, allow_empty=True),
+        )
 
 
 Payload = Union[
@@ -259,9 +289,7 @@ Payload = Union[
 PAYLOAD_TYPES: dict[str, type] = {cls.EVENT: cls for cls in get_args(Payload)}
 
 # Request-scoped events are meaningless without a request id.
-REQUEST_SCOPED_EVENTS = frozenset(
-    {"request_start", "prefill_end", "decode_tick", "request_end"}
-)
+REQUEST_SCOPED_EVENTS = frozenset({"request_start", "prefill_end", "decode_tick", "request_end"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -324,14 +352,19 @@ def decode_line(raw: bytes | str) -> Envelope:
     if payload_type is None:
         raise EventDropped(DropReason.UNKNOWN_EVENT, event)
 
+    if not set(obj).issubset({"v", "ts", "runId", "requestId", "event", "payload"}):
+        raise EventDropped(DropReason.INVALID_ENVELOPE, "unknown field")
+
     ts = obj.get("ts")
-    if not isinstance(ts, int) or isinstance(ts, bool) or ts < 0:
+    if not isinstance(ts, int) or isinstance(ts, bool) or ts < 0 or ts > MAX_UINT64:
         raise EventDropped(DropReason.INVALID_ENVELOPE, "ts")
     run_id = obj.get("runId")
-    if not isinstance(run_id, str):
+    if not isinstance(run_id, str) or not 1 <= len(run_id) <= 128:
         raise EventDropped(DropReason.INVALID_ENVELOPE, "runId")
     request_id = obj.get("requestId")
-    if request_id is not None and not isinstance(request_id, str):
+    if request_id is not None and (
+        not isinstance(request_id, str) or not 1 <= len(request_id) <= 128
+    ):
         raise EventDropped(DropReason.INVALID_ENVELOPE, "requestId")
 
     payload_obj = obj.get("payload")

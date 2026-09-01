@@ -9,7 +9,7 @@ options:
 
 # Signing lives in Local.xcconfig (gitignored). It is created from
 # Local.xcconfig.template by `make bootstrap`. DEVELOPMENT_TEAM stays empty
-# until M0.6; local/CI builds pass CODE_SIGNING_ALLOWED=NO.
+# until an owner-only signed release; local/CI builds pass CODE_SIGNING_ALLOWED=NO.
 configFiles:
   Debug: Local.xcconfig
   Release: Local.xcconfig
@@ -18,6 +18,7 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
+    ARCHS: arm64
 
 packages:
   LoupePackage:
@@ -37,8 +38,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.squint.loupe
         PRODUCT_NAME: Loupe
-        MARKETING_VERSION: "0.1.0"
-        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: "0.2.0"
+        CURRENT_PROJECT_VERSION: "2"
         GENERATE_INFOPLIST_FILE: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_KEY_CFBundleDisplayName: Loupe

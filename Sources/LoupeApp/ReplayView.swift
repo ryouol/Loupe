@@ -1,12 +1,14 @@
 import Charts
 import LoupeCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Session tab: empty state until a session is opened, then the correlated
 /// timeline. Accepts drops of either file of a session pair.
 struct SessionScreen: View {
     @Binding var basePath: String?
     let onOpen: () -> Void
+    let onOpenSample: () -> Void
 
     var body: some View {
         Group {
@@ -19,8 +21,9 @@ struct SessionScreen: View {
                 } description: {
                     Text("Open a recorded session (.ndjson pair), or drop one here.")
                 } actions: {
-                    Button("Open Session…", action: onOpen)
+                    Button("Open sample session", action: onOpenSample)
                         .buttonStyle(.borderedProminent)
+                    Button("Import session…", action: onOpen)
                 }
             }
         }
@@ -39,6 +42,9 @@ struct SessionScreen: View {
 /// distinct bands: that separation is a correctness requirement.
 public struct ReplayView: View {
     @State private var model: ReplayViewModel
+    @State private var exportDocument: TextExportDocument?
+    @State private var exportType: UTType = .json
+    @State private var exportFailure: String?
 
     public init(basePath: String) {
         _model = State(initialValue: ReplayViewModel(basePath: basePath))
@@ -77,6 +83,39 @@ public struct ReplayView: View {
         }
         .navigationSubtitle(model.session.name)
         .task { await model.load() }
+        .toolbar {
+            Button("Export evidence JSON", systemImage: "curlybraces") {
+                exportEvidence(as: .json)
+            }
+            .disabled(!model.isLoaded)
+            Button("Export evidence CSV", systemImage: "tablecells") {
+                exportEvidence(as: .commaSeparatedText)
+            }
+            .disabled(!model.isLoaded)
+        }
+        .fileExporter(
+            isPresented: Binding(
+                get: { exportDocument != nil },
+                set: { if !$0 { exportDocument = nil } }),
+            document: exportDocument,
+            contentType: exportType,
+            defaultFilename: "\(model.session.name)-evidence"
+        ) { result in
+            if case .failure(let error) = result {
+                exportFailure = error.localizedDescription
+            }
+            exportDocument = nil
+        }
+        .alert(
+            "Evidence export failed",
+            isPresented: Binding(
+                get: { exportFailure != nil },
+                set: { if !$0 { exportFailure = nil } })
+        ) {
+            Button("OK", role: .cancel) { exportFailure = nil }
+        } message: {
+            Text(exportFailure ?? "Unknown export error")
+        }
     }
 
     private var header: some View {
@@ -97,6 +136,19 @@ public struct ReplayView: View {
             StatChip(
                 value: model.thermalStatesSeen.map(\.rawValue).joined(separator: " → "),
                 label: "thermal", symbol: "thermometer.medium")
+        }
+    }
+
+    private func exportEvidence(as type: UTType) {
+        exportType = type
+        do {
+            let data =
+                type == .json
+                ? try model.evidenceJSON()
+                : Data(try model.evidenceCSV().utf8)
+            exportDocument = TextExportDocument(data: data)
+        } catch {
+            exportFailure = error.localizedDescription
         }
     }
 
@@ -136,6 +188,9 @@ public struct ReplayView: View {
             .chartLegend(position: .top, alignment: .trailing)
             .frame(height: max(44, CGFloat(28 + (model.requestSpans.map(\.lane).max() ?? 0) * 16)))
             .chartOverlay { proxy in ScrubOverlay(model: model, proxy: proxy) }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Inference phase timeline")
+            .accessibilityValue("\(model.requestSpans.count) completed requests")
         } label: {
             Label("Inference Phases", systemImage: "waveform.path.ecg")
         }
@@ -167,7 +222,7 @@ public struct ReplayView: View {
             }
             .padding(4)
         } label: {
-            Label("Findings — \(model.annotations.count)", systemImage: "exclamationmark.bubble")
+            Label("Findings (\(model.annotations.count))", systemImage: "exclamationmark.bubble")
         }
     }
 
@@ -214,8 +269,11 @@ public struct ReplayView: View {
             .chartLegend(position: .top, alignment: .trailing)
             .frame(height: 120)
             .chartOverlay { proxy in ScrubOverlay(model: model, proxy: proxy) }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("System memory and swap timeline")
+            .accessibilityValue("\(model.chartPoints.count) plotted samples")
         } label: {
-            Label("System-Wide — memory & swap", systemImage: "desktopcomputer")
+            Label("System-wide: memory and swap", systemImage: "desktopcomputer")
         }
         .backgroundStyle(.blue.opacity(0.05))
     }
@@ -249,8 +307,11 @@ public struct ReplayView: View {
             .chartLegend(position: .top, alignment: .trailing)
             .frame(height: 110)
             .chartOverlay { proxy in ScrubOverlay(model: model, proxy: proxy) }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("GPU utilization and package power timeline")
+            .accessibilityValue("\(model.gpuChartPoints.count) plotted samples")
         } label: {
-            Label("System-Wide — GPU & power", systemImage: "bolt")
+            Label("System-wide: GPU and power", systemImage: "bolt")
         }
         .backgroundStyle(.blue.opacity(0.05))
     }
@@ -270,8 +331,11 @@ public struct ReplayView: View {
             .chartXScale(domain: xDomain)
             .frame(height: 110)
             .chartOverlay { proxy in ScrubOverlay(model: model, proxy: proxy) }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Observed process memory timeline")
+            .accessibilityValue("\(model.processChartPoints.count) plotted samples")
         } label: {
-            Label("Observed Process — RSS", systemImage: "app.badge")
+            Label("Observed process: RSS", systemImage: "app.badge")
         }
         .backgroundStyle(.purple.opacity(0.06))
     }
@@ -304,7 +368,7 @@ public struct ReplayView: View {
             }
             .frame(minHeight: 120, idealHeight: 160)
         } label: {
-            Label("Requests — \(model.requestMetrics.count)", systemImage: "list.number")
+            Label("Requests (\(model.requestMetrics.count))", systemImage: "list.number")
         }
     }
 
@@ -323,7 +387,7 @@ public struct ReplayView: View {
                 }
                 .width(150)
                 TableColumn("Request") { milestone in
-                    Text(milestone.requestId ?? "—")
+                    Text(milestone.requestId ?? "None")
                         .foregroundStyle(.secondary)
                 }
                 .width(80)
@@ -337,7 +401,7 @@ public struct ReplayView: View {
             .frame(minHeight: 200)
         } label: {
             Label(
-                "Events — \(model.decodeTickCount) decode ticks collapsed",
+                "Events (\(model.decodeTickCount) decode ticks collapsed)",
                 systemImage: "list.bullet.rectangle")
         }
     }
@@ -364,20 +428,40 @@ private struct ScrubReadoutBar: View {
                 if let gpu = readout.gpuBusyPercent {
                     value("gpu", String(format: "%.0f%%", gpu))
                 }
-                value("request", readout.activeRequestId ?? "—")
+                value("request", readout.activeRequestId ?? "None")
                 Spacer()
+                Button {
+                    moveScrubber(by: -0.1)
+                } label: {
+                    Label("Move scrubber back", systemImage: "chevron.left")
+                        .labelStyle(.iconOnly)
+                }
+                .keyboardShortcut("[", modifiers: [])
+                Button {
+                    moveScrubber(by: 0.1)
+                } label: {
+                    Label("Move scrubber forward", systemImage: "chevron.right")
+                        .labelStyle(.iconOnly)
+                }
+                .keyboardShortcut("]", modifiers: [])
                 Button("Clear") { model.scrubSeconds = nil }
                     .controlSize(.small)
             } else {
                 Text("Drag across any lane to scrub the timeline")
                     .foregroundStyle(.secondary)
                 Spacer()
+                Button("Start scrubber") { model.scrubSeconds = 0 }
+                    .controlSize(.small)
             }
         }
         .font(.callout)
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func moveScrubber(by delta: Double) {
+        model.scrubSeconds = min(max(0, (model.scrubSeconds ?? 0) + delta), model.durationSeconds)
     }
 
     private func value(_ label: String, _ text: String) -> some View {
@@ -425,6 +509,7 @@ private struct ScrubOverlay: View {
                     )
             }
         }
+        .accessibilityHidden(true)
     }
 }
 
@@ -439,12 +524,19 @@ struct StatChip: View {
             Image(systemName: symbol)
                 .foregroundStyle(tint)
             VStack(alignment: .leading, spacing: 1) {
-                Text(value).font(.callout.weight(.semibold)).monospacedDigit()
+                Text(value)
+                    .font(.callout.weight(.semibold))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(value)
                 Text(label).font(.caption2).foregroundStyle(.secondary)
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
         .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(label): \(value)")
     }
 }

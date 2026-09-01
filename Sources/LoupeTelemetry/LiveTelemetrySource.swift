@@ -59,7 +59,10 @@ public actor LiveTelemetrySource: TelemetrySource {
         let cadence = cadence
         let timebase = timebase
         let makePowerReader = makePowerReader
-        return AsyncStream { continuation in
+        // The producer must remain bounded if an XPC client or disk writer
+        // stalls. Telemetry is a latest-state signal, so keeping the newest
+        // 64 rows is preferable to accumulating an unbounded backlog.
+        return AsyncStream(bufferingPolicy: .bufferingNewest(64)) { continuation in
             let task = Task {
                 var tracker = CPUDeltaTracker()
                 let powerReader = makePowerReader()

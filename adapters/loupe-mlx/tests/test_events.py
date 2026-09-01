@@ -1,5 +1,4 @@
 import pytest
-
 from loupe_mlx.events import (
     MAX_LINE_BYTES,
     PAYLOAD_TYPES,
@@ -79,3 +78,55 @@ def test_encoder_omits_none_request_id() -> None:
     encoded = encode_line(envelope)
     assert b"requestId" not in encoded
     assert encoded.endswith(b"}")  # framing belongs to the NDJSON writer
+
+
+def test_instrument_rejects_unencodable_run_identifier() -> None:
+    from loupe_mlx import LoupeInstrument
+
+    class Sink:
+        dropped = 0
+        connected = True
+
+        def emit(self, _envelope) -> None:
+            raise AssertionError("invalid metadata must fail before the first event")
+
+        def close(self) -> None:
+            pass
+
+    with pytest.raises(ValueError, match="run_id"):
+        LoupeInstrument(run_id="r" * 129, writer=Sink())
+
+
+@pytest.mark.parametrize(
+    ("line", "reason"),
+    [
+        (
+            b'{"v":1,"ts":1,"runId":"","event":"model_load_start","payload":{"modelId":"m"}}',
+            DropReason.INVALID_ENVELOPE,
+        ),
+        (
+            b'{"v":1,"ts":1,"runId":"r","event":"session_start","payload":{"adapter":"a","adapterVersion":"1","runtime":"mlx","pid":0}}',
+            DropReason.INVALID_PAYLOAD,
+        ),
+        (
+            b'{"v":1,"ts":1,"runId":"r","event":"model_load_start","extra":true,"payload":{"modelId":"m"}}',
+            DropReason.INVALID_ENVELOPE,
+        ),
+        (
+            b'{"v":1,"ts":1,"runId":"r","event":"model_load_start","payload":{"modelId":"m","extra":true}}',
+            DropReason.INVALID_PAYLOAD,
+        ),
+        (
+            b'{"v":1,"ts":18446744073709551616,"runId":"r","event":"model_load_start","payload":{"modelId":"m"}}',
+            DropReason.INVALID_ENVELOPE,
+        ),
+        (
+            b'{"v":1,"ts":1,"runId":"r","requestId":"q","event":"decode_tick","payload":{"outputTokens":4294967296,"kvCacheBytes":0,"activeMemoryBytes":0}}',
+            DropReason.INVALID_PAYLOAD,
+        ),
+    ],
+)
+def test_decode_enforces_schema_constraints(line: bytes, reason: DropReason) -> None:
+    with pytest.raises(EventDropped) as failure:
+        decode_line(line)
+    assert failure.value.reason is reason

@@ -3,6 +3,7 @@ import XCTest
 
 @testable import LoupeCore
 @testable import LoupeSampler
+@testable import LoupeTelemetry
 
 /// Drives the real NSXPC machinery in-process through an anonymous listener:
 /// no mach service registration, no SMAppService, no root. What this cannot
@@ -14,7 +15,9 @@ final class DaemonXPCTests: XCTestCase {
         // Composition is explicit now; include the IOReport reader like the
         // daemon's composition root does, so on real hardware this test
         // still covers GPU data surviving the XPC round trip.
-        let delegate = DaemonListenerDelegate(daemonVersion: "test-0.0.1") { cadence in
+        let delegate = DaemonListenerDelegate(
+            daemonVersion: "test-0.0.1", peerValidator: .currentProcessForTesting
+        ) { cadence in
             LiveTelemetrySource(
                 targetPID: nil, cadence: cadence,
                 makePowerReader: { IOReportPowerReader() })
@@ -23,6 +26,35 @@ final class DaemonXPCTests: XCTestCase {
         listener.resume()
         let client = DaemonXPCClient(endpoint: .anonymous(listener.endpoint))
         return (client, listener, delegate)
+    }
+
+    func testListenerRejectsPeerWhenPolicyDenies() {
+        let listener = NSXPCListener.anonymous()
+        let delegate = DaemonListenerDelegate(
+            daemonVersion: "test", peerValidator: DaemonPeerValidator { _ in false }
+        ) { cadence in
+            LiveTelemetrySource(targetPID: nil, cadence: cadence)
+        }
+        listener.delegate = delegate
+        listener.resume()
+        defer {
+            listener.invalidate()
+            _ = delegate
+        }
+
+        let connection = NSXPCConnection(listenerEndpoint: listener.endpoint)
+        connection.remoteObjectInterface = NSXPCInterface(with: LoupeDaemonXPCProtocol.self)
+        connection.resume()
+        defer { connection.invalidate() }
+
+        let rejected = expectation(description: "connection rejected")
+        connection.invalidationHandler = { rejected.fulfill() }
+        (connection.remoteObjectProxy as? LoupeDaemonXPCProtocol)?.handshake(
+            clientProtocolVersion: EventProtocol.version
+        ) { _ in
+            XCTFail("denied peer must not receive a handshake")
+        }
+        wait(for: [rejected], timeout: 2)
     }
 
     func testHandshakeRoundTrip() async {
@@ -47,6 +79,8 @@ final class DaemonXPCTests: XCTestCase {
             _ = delegate
         }
         let stream = client.activate()
+        let handshake = await client.handshake()
+        XCTAssertNotNil(handshake)
         client.startStream(intervalMs: 20)
 
         var received: [SystemSample] = []
@@ -75,6 +109,8 @@ final class DaemonXPCTests: XCTestCase {
         let (client, listener, delegate) = makeConnectedClient()
         defer { _ = delegate }
         let stream = client.activate()
+        let handshake = await client.handshake()
+        XCTAssertNotNil(handshake)
         client.startStream(intervalMs: 20)
 
         var count = 0

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import LoupeCore
 import LoupeSampler
@@ -48,6 +49,8 @@ public final class ReplayViewModel {
     public private(set) var totalEventCount = 0
     public private(set) var sampleDrops = 0
     public private(set) var eventDrops = 0
+    public private(set) var eventSourceSHA256: String?
+    public private(set) var telemetrySourceSHA256: String?
     public private(set) var thermalStatesSeen: [ThermalState] = []
     public private(set) var durationSeconds: Double = 0
     public private(set) var isLoaded = false
@@ -79,6 +82,8 @@ public final class ReplayViewModel {
         samples = telemetryResult.samples
         sampleDrops = telemetryResult.drops
         eventDrops = eventsResult.drops
+        telemetrySourceSHA256 = telemetryResult.sourceSHA256
+        eventSourceSHA256 = eventsResult.sourceSHA256
         chartPoints = assembled.chartPoints
         chartSeconds = assembled.chartPoints.map(\.seconds)
         processChartPoints = assembled.processChartPoints
@@ -126,24 +131,50 @@ public final class ReplayViewModel {
 
     private nonisolated static func loadTelemetry(
         from url: URL
-    ) async -> (samples: [SystemSample], drops: Int, failure: String?) {
-        let source = ReplayTelemetrySource(fileURL: url)
+    ) async -> (samples: [SystemSample], drops: Int, failure: String?, sourceSHA256: String?) {
+        let data: Data
+        do {
+            data = try ReplayResourceLimits.read(
+                url, maximumBytes: ReplayResourceLimits.maxTelemetryFileBytes)
+        } catch {
+            return ([], 0, error.localizedDescription, nil)
+        }
+        let source = ReplayTelemetrySource(data: data, sourceURL: url)
         var samples: [SystemSample] = []
         for await sample in await source.stream() {
             samples.append(sample)
         }
-        return (samples, await source.droppedLines, await source.loadFailure)
+        return (
+            samples, await source.droppedLines, await source.loadFailure,
+            sourceSHA256(data)
+        )
     }
 
     private nonisolated static func loadEvents(
         from url: URL
-    ) async -> (envelopes: [EventEnvelope], drops: Int, failure: String?) {
-        let source = ReplayEventSource(fileURL: url)
+    ) async -> (
+        envelopes: [EventEnvelope], drops: Int, failure: String?, sourceSHA256: String?
+    ) {
+        let data: Data
+        do {
+            data = try ReplayResourceLimits.read(
+                url, maximumBytes: ReplayResourceLimits.maxEventFileBytes)
+        } catch {
+            return ([], 0, error.localizedDescription, nil)
+        }
+        let source = ReplayEventSource(data: data, sourceURL: url)
         var envelopes: [EventEnvelope] = []
         for await envelope in await source.stream() {
             envelopes.append(envelope)
         }
-        return (envelopes, await source.drops.total, await source.loadFailure)
+        return (
+            envelopes, await source.drops.total, await source.loadFailure,
+            sourceSHA256(data)
+        )
+    }
+
+    nonisolated static func sourceSHA256(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
     // MARK: - Assembly

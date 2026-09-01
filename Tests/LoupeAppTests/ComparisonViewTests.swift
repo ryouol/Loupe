@@ -7,19 +7,20 @@ import XCTest
 
 @MainActor
 final class ComparisonViewTests: XCTestCase {
-    private static let realReport = URL(fileURLWithPath: #filePath)
+    private static let validReport = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
         .deletingLastPathComponent()
         .deletingLastPathComponent()
-        .appendingPathComponent("fixtures/benchmark-baseline.report.json")
+        .appendingPathComponent("Tests/LoupeBenchTests/golden-report.json")
 
     private func mismatchedReportURL() throws -> URL {
-        let original = try BenchmarkAssembler.decode(Data(contentsOf: Self.realReport))
+        let original = try BenchmarkAssembler.decode(contentsOf: Self.validReport)
         var spec = original.spec
         spec.quantization = "8bit"
         let altered = BenchmarkReport(
             formatVersion: original.formatVersion, spec: spec, host: original.host,
-            createdAtNs: original.createdAtNs, contexts: original.contexts)
+            createdAtNs: original.createdAtNs, provenance: original.provenance,
+            contexts: original.contexts)
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("loupe-mismatch-\(UUID().uuidString).json")
         try BenchmarkAssembler.encode(altered).write(to: url)
@@ -28,8 +29,8 @@ final class ComparisonViewTests: XCTestCase {
 
     func testIdenticalReportsCompareWithZeroDeltas() {
         let model = ComparisonViewModel()
-        model.load(url: Self.realReport, asBaseline: true)
-        model.load(url: Self.realReport, asBaseline: false)
+        model.load(url: Self.validReport, asBaseline: true)
+        model.load(url: Self.validReport, asBaseline: false)
 
         let comparison = model.comparison
         XCTAssertTrue(comparison?.isComparable ?? false)
@@ -41,7 +42,7 @@ final class ComparisonViewTests: XCTestCase {
 
     func testMismatchedReportsBlockWithBannerData() throws {
         let model = ComparisonViewModel()
-        model.load(url: Self.realReport, asBaseline: true)
+        model.load(url: Self.validReport, asBaseline: true)
         model.load(url: try mismatchedReportURL(), asBaseline: false)
 
         let comparison = try XCTUnwrap(model.comparison)
@@ -58,19 +59,36 @@ final class ComparisonViewTests: XCTestCase {
 
     func testComparableExportsCarryDeltas() throws {
         let model = ComparisonViewModel()
-        model.load(url: Self.realReport, asBaseline: true)
-        model.load(url: Self.realReport, asBaseline: false)
+        model.load(url: Self.validReport, asBaseline: true)
+        model.load(url: Self.validReport, asBaseline: false)
 
         let csv = try XCTUnwrap(model.exportCSV())
         XCTAssertTrue(csv.hasPrefix("context_tokens,metric,"))
-        XCTAssertTrue(csv.contains("64,decode tok/s,"))
-        XCTAssertTrue(csv.contains("256,TTFT ms,"))
+        XCTAssertTrue(csv.contains("128,decode tok/s,"))
+        XCTAssertTrue(csv.contains("512,TTFT ms,"))
 
         let json = try XCTUnwrap(model.exportJSON())
         let payload = try JSONDecoder().decode(ComparisonExport.JSONPayload.self, from: json)
         XCTAssertTrue(payload.comparable)
         XCTAssertEqual(payload.deltas?.count, 4)
         XCTAssertTrue(payload.mismatches.isEmpty)
+    }
+
+    func testComparisonCSVQuotesHeadersAndNeutralizesFormulas() {
+        let comparison = RunComparison(
+            mismatches: [],
+            deltas: [
+                .init(
+                    contextTokens: 64, metric: "decode tok/s",
+                    baselineP50: 1, candidateP50: 2)
+            ])
+        let csv = ComparisonExport.csv(
+            baselineName: "=unsafe", candidateName: "candidate,name",
+            comparison: comparison)
+
+        XCTAssertTrue(
+            csv.hasPrefix(
+                "context_tokens,metric,'=unsafe_p50,\"candidate,name_p50\",delta_percent"))
     }
 
     func testComparisonViewRendersBothStates() {

@@ -3,6 +3,13 @@ import XCTest
 @testable import LoupeCore
 
 final class EventCodecTests: XCTestCase {
+    func testDropCounterRecordsReason() {
+        var counter = EventDropCounter()
+        counter.record(.malformedJSON)
+        XCTAssertEqual(counter.total, 1)
+        XCTAssertEqual(counter.byReason["malformed_json"], 1)
+    }
+
     /// Tests run from anywhere, so locate the repo through this file's path.
     private static let repoRoot = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
@@ -36,6 +43,35 @@ final class EventCodecTests: XCTestCase {
                     "valid example dropped as \(reason): \(String(decoding: line, as: UTF8.self))")
             }
         }
+    }
+
+    func testValidExamplesFormOneSemanticStream() throws {
+        var validator = EventStreamValidator()
+        let decoder = EventLineDecoder()
+        for line in try exampleLines("protocol/examples/v1-events.ndjson") {
+            let envelope = try decoder.decode(line: line).get()
+            XCTAssertTrue(validator.accepts(envelope))
+        }
+    }
+
+    func testStreamValidatorRejectsReusedRequestIdentifier() {
+        var validator = EventStreamValidator()
+        let events = [
+            EventEnvelope(
+                ts: 1, runId: "r", requestId: nil,
+                payload: .sessionStart(
+                    .init(adapter: "a", adapterVersion: "1", runtime: "r", pid: 1))),
+            EventEnvelope(
+                ts: 2, runId: "r", requestId: "q",
+                payload: .requestStart(.init(promptTokens: nil))),
+            EventEnvelope(
+                ts: 3, runId: "r", requestId: "q",
+                payload: .requestEnd(.init(outputTokens: 0, finishReason: "error"))),
+            EventEnvelope(
+                ts: 4, runId: "r", requestId: "q",
+                payload: .requestStart(.init(promptTokens: nil))),
+        ]
+        XCTAssertEqual(events.map { validator.accepts($0) }, [true, true, true, false])
     }
 
     func testExamplesCoverEveryEventKind() throws {
@@ -127,5 +163,40 @@ final class EventCodecTests: XCTestCase {
         let text = String(decoding: data, as: UTF8.self)
         XCTAssertFalse(text.contains("requestId"))
         XCTAssertFalse(text.contains("\\/"), "slashes must not be escaped in NDJSON output")
+    }
+
+    func testSchemaConstraintsAreEnforcedBeyondCodableShape() {
+        let decoder = EventLineDecoder()
+        let cases: [(String, String)] = [
+            (
+                #"{"v":1,"ts":1,"runId":"","event":"model_load_start","payload":{"modelId":"m"}}"#,
+                "invalid_envelope"
+            ),
+            (
+                #"{"v":1,"ts":1,"runId":"r","event":"session_start","payload":{"adapter":"a","adapterVersion":"1","runtime":"mlx","pid":0}}"#,
+                "invalid_payload"
+            ),
+            (
+                #"{"v":1,"ts":1,"runId":"r","event":"model_load_start","extra":true,"payload":{"modelId":"m"}}"#,
+                "invalid_envelope"
+            ),
+            (
+                #"{"v":1,"ts":1,"runId":"r","event":"model_load_start","payload":{"modelId":"m","extra":true}}"#,
+                "invalid_payload"
+            ),
+            (
+                #"{"v":1,"ts":1,"runId":"r","requestId":"","event":"request_start","payload":{}}"#,
+                "invalid_envelope"
+            ),
+        ]
+
+        for (line, reason) in cases {
+            switch decoder.decode(line: Data(line.utf8)) {
+            case .success:
+                XCTFail("schema-invalid input was accepted: \(line)")
+            case .failure(let failure):
+                XCTAssertEqual(failure.label, reason, line)
+            }
+        }
     }
 }

@@ -51,11 +51,31 @@ public struct ResultsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header(report: report)
+                if !report.validationFailures.isEmpty {
+                    invalidReportBanner(report.validationFailures)
+                }
                 sweepCharts
                 runTable
             }
             .padding(20)
         }
+    }
+
+    private func invalidReportBanner(_ failures: [String]) -> some View {
+        GroupBox {
+            Label {
+                Text(
+                    "This report is view-only. Integrity or provenance checks failed, so Loupe "
+                        + "will not compare it: \(failures.joined(separator: ", "))."
+                )
+                .fixedSize(horizontal: false, vertical: true)
+            } icon: {
+                Image(systemName: "exclamationmark.shield.fill")
+                    .foregroundStyle(.orange)
+            }
+            .padding(4)
+        }
+        .backgroundStyle(.orange.opacity(0.08))
     }
 
     private func header(report: BenchmarkReport) -> some View {
@@ -96,7 +116,7 @@ public struct ResultsView: View {
                 let summary = point[keyPath: metric]
                 RuleMark(
                     x: .value("Context", "\(point.contextTokens)"),
-                    yStart: .value("v", summary.p50 - summary.stddev),
+                    yStart: .value("v", max(0, summary.p50 - summary.stddev)),
                     yEnd: .value("v", summary.p50 + summary.stddev)
                 )
                 .foregroundStyle(tint.opacity(0.6))

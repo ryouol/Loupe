@@ -1,5 +1,6 @@
 import Foundation
 import LoupeCore
+import LoupeTelemetry
 
 /// Push-based thermal state changes (vs. the sampler's polled reads): the
 /// cooldown gate between benchmark runs waits on these instead of spinning.

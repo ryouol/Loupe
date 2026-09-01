@@ -2,5 +2,5 @@
 /// definitions arrive in later M0 tasks; this module holds no I/O.
 public enum Loupe {
     /// Marketing version, mirrored by the app target's `MARKETING_VERSION`.
-    public static let version = "0.1.0"
+    public static let version = "0.2.0"
 }

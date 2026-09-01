@@ -4,9 +4,9 @@ import LoupeCore
 import LoupeLlamaCpp
 
 // Drives llama-server completions and streams protocol-v1 events to the
-// Loupe daemon. The server is observed from outside: per-request truth from
+// Loupe app. The server is observed from outside: per-request truth from
 // /completion timings, gauges from /metrics at 10 Hz, PID resolved from the
-// listening socket so the daemon can attach per-process telemetry.
+// listening socket so the app can attach per-process telemetry.
 
 func fail(_ message: String) -> Never {
     FileHandle.standardError.write(Data((message + "\n").utf8))
@@ -18,7 +18,12 @@ func log(_ message: String) {
 }
 
 var serverURL = URL(string: "http://127.0.0.1:8080")
-var socketPath = LoupeDaemon.adapterSocketPath
+var socketPath =
+    ProcessInfo.processInfo.environment[LoupeEnvironment.adapterSocketVariable]
+    ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    .appendingPathComponent("Loupe")
+    .appendingPathComponent(LoupeUserRuntime.directoryName)
+    .appendingPathComponent(LoupeUserRuntime.adapterSocketName).path
 var prompt = "Explain the difference between prefill and decode in one sentence."
 var maxTokens = 64
 var kvLayers = 24
@@ -28,13 +33,37 @@ var kvHeads = 2
 var arguments = CommandLine.arguments.dropFirst().makeIterator()
 while let argument = arguments.next() {
     switch argument {
-    case "--server": serverURL = arguments.next().flatMap(URL.init(string:)) ?? serverURL
-    case "--socket": socketPath = arguments.next() ?? socketPath
-    case "--prompt": prompt = arguments.next() ?? prompt
-    case "--max-tokens": maxTokens = arguments.next().flatMap(Int.init) ?? maxTokens
-    case "--kv-layers": kvLayers = arguments.next().flatMap(Int.init) ?? kvLayers
-    case "--kv-head-dim": kvHeadDimension = arguments.next().flatMap(Int.init) ?? kvHeadDimension
-    case "--kv-heads": kvHeads = arguments.next().flatMap(Int.init) ?? kvHeads
+    case "--server":
+        guard let value = arguments.next(), let parsed = URL(string: value) else {
+            fail("--server requires a valid URL")
+        }
+        serverURL = parsed
+    case "--socket":
+        guard let value = arguments.next() else { fail("--socket requires a path") }
+        socketPath = value
+    case "--prompt":
+        guard let value = arguments.next() else { fail("--prompt requires text") }
+        prompt = value
+    case "--max-tokens":
+        guard let value = arguments.next().flatMap(Int.init) else {
+            fail("--max-tokens requires an integer")
+        }
+        maxTokens = value
+    case "--kv-layers":
+        guard let value = arguments.next().flatMap(Int.init) else {
+            fail("--kv-layers requires an integer")
+        }
+        kvLayers = value
+    case "--kv-head-dim":
+        guard let value = arguments.next().flatMap(Int.init) else {
+            fail("--kv-head-dim requires an integer")
+        }
+        kvHeadDimension = value
+    case "--kv-heads":
+        guard let value = arguments.next().flatMap(Int.init) else {
+            fail("--kv-heads requires an integer")
+        }
+        kvHeads = value
     default:
         fail(
             "usage: loupe-llamacpp [--server url] [--socket path] [--prompt text] "
@@ -42,12 +71,34 @@ while let argument = arguments.next() {
     }
 }
 guard let serverURL else { fail("invalid --server URL") }
+guard let scheme = serverURL.scheme?.lowercased(), ["http", "https"].contains(scheme),
+    serverURL.user == nil, serverURL.password == nil,
+    let host = serverURL.host?.lowercased(),
+    ["127.0.0.1", "::1"].contains(host)
+else {
+    fail(
+        "--server must use the numeric loopback address 127.0.0.1 or ::1 without credentials"
+    )
+}
+guard (1...4_096).contains(maxTokens), prompt.utf8.count <= 65_536,
+    (1...512).contains(kvLayers), (1...1_024).contains(kvHeadDimension),
+    (1...256).contains(kvHeads)
+else { fail("token, prompt, or KV dimensions exceed safe adapter limits") }
+guard !socketPath.isEmpty,
+    socketPath.utf8.count < MemoryLayout.size(ofValue: sockaddr_un().sun_path)
+else { fail("adapter socket path is empty or too long") }
 
 let kvModel = KVCacheModel(layers: kvLayers, headDimension: kvHeadDimension, kvHeads: kvHeads)
-let runId = "r-\(UUID().uuidString.prefix(8).lowercased())"
+let runId =
+    ProcessInfo.processInfo.environment[LoupeEnvironment.runIDVariable]
+    ?? "r-\(UUID().uuidString.prefix(8).lowercased())"
+guard !runId.isEmpty, runId.count <= 128 else {
+    fail("LOUPE_RUN_ID must contain 1 to 128 characters")
+}
 let timebase = Timebase.live()
 let writer = UnixSocketLineWriter(socketPath: socketPath)
 let encoder = EventLineEncoder()
+let httpSession = AdapterHTTP.session()
 
 func emit(_ envelope: EventEnvelope) {
     if let line = try? encoder.encode(envelope) {
@@ -56,14 +107,17 @@ func emit(_ envelope: EventEnvelope) {
 }
 
 do {
-    let port = UInt16(serverURL.port ?? 8080)
-    let serverPID = ListeningPortResolver.pid(listeningOn: port)
-    if serverPID == nil {
-        log("warning: no local process listening on \(port); is llama-server up?")
+    let defaultPort = scheme == "https" ? 443 : 80
+    guard let port = UInt16(exactly: serverURL.port ?? defaultPort), port > 0 else {
+        throw AdapterFailure.invalidServerPort
+    }
+    guard let serverPID = ListeningPortResolver.pid(listeningOn: port) else {
+        throw AdapterFailure.serverProcessNotFound(port)
     }
 
-    let props: LlamaServerProps = try await fetchJSON(serverURL.appendingPathComponent("props"))
-    log("llama-server: n_ctx \(props.defaultGenerationSettings.nCtx), pid \(serverPID ?? -1)")
+    let props: LlamaServerProps = try await fetchJSON(
+        serverURL.appendingPathComponent("props"), session: httpSession)
+    log("llama-server: n_ctx \(props.defaultGenerationSettings.nCtx), pid \(serverPID)")
 
     emit(
         EventEnvelope(
@@ -71,19 +125,21 @@ do {
             payload: .sessionStart(
                 SessionStartPayload(
                     adapter: "loupe-llamacpp", adapterVersion: Loupe.version,
-                    runtime: "llama.cpp", pid: serverPID ?? 0))))
+                    runtime: "llama.cpp", pid: serverPID))))
     let now = timebase.nowNanoseconds()
     emit(
         EventEnvelope(
             ts: now, runId: runId, requestId: nil,
             payload: .clockSync(ClockSyncPayload(t0: now, t1: now, t2: now, t3: now))))
 
-    let poller = MetricsPoller(url: serverURL.appendingPathComponent("metrics"))
+    let poller = MetricsPoller(
+        url: serverURL.appendingPathComponent("metrics"), session: httpSession)
     await poller.start()
 
     let startNs = timebase.nowNanoseconds()
     let (chunks, arrivals) = try await streamCompletion(
-        server: serverURL, prompt: prompt, maxTokens: maxTokens, timebase: timebase)
+        server: serverURL, prompt: prompt, maxTokens: maxTokens,
+        timebase: timebase, session: httpSession)
     for envelope in LlamaRequestTrace.events(
         runId: runId, requestId: "q-1", requestStartNs: startNs,
         chunkArrivalsNs: arrivals, chunks: chunks, kv: kvModel)
@@ -102,19 +158,48 @@ do {
         EventEnvelope(
             ts: timebase.nowNanoseconds(), runId: runId, requestId: nil,
             payload: .error(
-                ErrorPayload(code: "adapter_failed", message: "\(error)"))))
+                ErrorPayload(code: "adapter_failed", message: evidenceErrorMessage(error)))))
     writer.close()
     fail("loupe-llamacpp failed: \(error)")
 }
 
-func fetchJSON<T: Decodable>(_ url: URL) async throws -> T {
-    let (data, _) = try await URLSession.shared.data(from: url)
+enum AdapterFailure: Error {
+    case invalidServerPort
+    case serverProcessNotFound(UInt16)
+    case invalidHTTPResponse
+    case responseTooLarge
+    case streamLineTooLarge
+    case tooManyChunks
+}
+
+/// Persisted evidence is intentionally less detailed than local stderr:
+/// networking and decoding errors can embed URLs, response snippets, or
+/// other user data. The evidence stream keeps only a bounded error category.
+func evidenceErrorMessage(_ error: Error) -> String {
+    if let failure = error as? AdapterFailure {
+        switch failure {
+        case .invalidServerPort: return "The local server port was invalid."
+        case .serverProcessNotFound: return "No same-user local server process was found."
+        case .invalidHTTPResponse: return "The local server returned an invalid response."
+        case .responseTooLarge: return "The local server response exceeded the safety limit."
+        case .streamLineTooLarge: return "A local server stream line exceeded the safety limit."
+        case .tooManyChunks: return "The local server returned too many stream chunks."
+        }
+    }
+    return "The local llama.cpp request failed (\(String(describing: type(of: error))))."
+}
+
+func fetchJSON<T: Decodable>(_ url: URL, session: URLSession) async throws -> T {
+    let (data, response) = try await AdapterHTTP.boundedData(
+        from: url, session: session, maximumBytes: AdapterHTTP.maxMetadataBytes)
+    guard AdapterHTTP.isSuccessful(response) else { throw AdapterFailure.invalidHTTPResponse }
     return try JSONDecoder().decode(T.self, from: data)
 }
 
 /// Streams /completion, timestamping every SSE chunk on arrival.
 func streamCompletion(
-    server: URL, prompt: String, maxTokens: Int, timebase: Timebase
+    server: URL, prompt: String, maxTokens: Int, timebase: Timebase,
+    session: URLSession
 ) async throws -> ([LlamaCompletionChunk], [UInt64]) {
     var request = URLRequest(url: server.appendingPathComponent("completion"))
     request.httpMethod = "POST"
@@ -126,17 +211,35 @@ func streamCompletion(
         "timings_per_token": false,
     ])
 
+    request.timeoutInterval = 300
     var chunks: [LlamaCompletionChunk] = []
     var arrivals: [UInt64] = []
     let decoder = JSONDecoder()
-    let (bytes, _) = try await URLSession.shared.bytes(for: request)
-    for try await line in bytes.lines {
-        guard let payload = SSEParser.dataPayloads(line + "\n").first,
-            let chunk = try? decoder.decode(LlamaCompletionChunk.self, from: payload)
-        else { continue }
-        chunks.append(chunk)
-        arrivals.append(timebase.nowNanoseconds())
-        if chunk.stop { break }
+    let (bytes, response) = try await session.bytes(for: request)
+    guard AdapterHTTP.isSuccessful(response) else { throw AdapterFailure.invalidHTTPResponse }
+    var line = Data()
+    var receivedBytes = 0
+    stream: for try await byte in bytes {
+        receivedBytes += 1
+        guard receivedBytes <= AdapterHTTP.maxStreamBytes else {
+            throw AdapterFailure.responseTooLarge
+        }
+        if byte == UInt8(ascii: "\n") {
+            let text = String(decoding: line, as: UTF8.self)
+            line.removeAll(keepingCapacity: true)
+            guard let payload = SSEParser.dataPayloads(text + "\n").first,
+                let chunk = try? decoder.decode(LlamaCompletionChunk.self, from: payload)
+            else { continue }
+            guard chunks.count < maxTokens + 8 else { throw AdapterFailure.tooManyChunks }
+            chunks.append(chunk)
+            arrivals.append(timebase.nowNanoseconds())
+            if chunk.stop { break stream }
+        } else {
+            guard line.count < AdapterHTTP.maxLineBytes else {
+                throw AdapterFailure.streamLineTooLarge
+            }
+            line.append(byte)
+        }
     }
     return (chunks, arrivals)
 }

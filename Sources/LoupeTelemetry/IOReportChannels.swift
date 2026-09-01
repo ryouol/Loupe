@@ -60,6 +60,7 @@ enum IOReportChannelLogic {
     /// Energy channels report in generation-dependent units; unknown units
     /// degrade to nil rather than silently mis-scaling.
     static func millijoules(_ value: Int64, unitLabel: String) -> Double? {
+        guard value >= 0 else { return nil }
         switch unitLabel.trimmingCharacters(in: .whitespaces) {
         case "mJ": return Double(value)
         case "uJ", "µJ": return Double(value) / 1_000
@@ -69,18 +70,21 @@ enum IOReportChannelLogic {
     }
 
     static func milliwatts(energyMillijoules: Double, intervalNs: UInt64) -> Double? {
-        guard intervalNs > 0 else { return nil }
-        return energyMillijoules / (Double(intervalNs) / 1_000_000_000)
+        guard intervalNs > 0, energyMillijoules.isFinite, energyMillijoules >= 0 else {
+            return nil
+        }
+        let value = energyMillijoules / (Double(intervalNs) / 1_000_000_000)
+        return value.isFinite ? value : nil
     }
 
     /// Busy% from performance-state residency deltas: everything that isn't
     /// an off/idle state counts as busy.
     static func busyPercent(states: [(name: String, residency: Int64)]) -> Double? {
-        let total = states.reduce(Int64(0)) { $0 + max(0, $1.residency) }
+        let total = states.reduce(0.0) { $0 + Double(max(0, $1.residency)) }
         guard total > 0 else { return nil }
         let idle = states.filter { isIdleState($0.name) }
-            .reduce(Int64(0)) { $0 + max(0, $1.residency) }
-        return 100.0 * Double(total - idle) / Double(total)
+            .reduce(0.0) { $0 + Double(max(0, $1.residency)) }
+        return 100.0 * (total - idle) / total
     }
 
     private static func isIdleState(_ name: String) -> Bool {

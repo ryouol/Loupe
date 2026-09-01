@@ -1,9 +1,29 @@
 import Foundation
 import LoupeCore
+import LoupeTelemetry
+
+private final class HandshakeContinuation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<DaemonHandshake?, Never>?
+
+    init(_ continuation: CheckedContinuation<DaemonHandshake?, Never>) {
+        self.continuation = continuation
+    }
+
+    func resume(returning value: DaemonHandshake?) {
+        let pending = lock.withLock { () -> CheckedContinuation<DaemonHandshake?, Never>? in
+            defer { continuation = nil }
+            return continuation
+        }
+        pending?.resume(returning: value)
+    }
+}
 
 /// App-exported receiver. @unchecked is safe: its only state is the
 /// continuation, which is Sendable, and NSXPC calls deliver on any queue.
 final class SampleReceiver: NSObject, LoupeSampleReceiverXPCProtocol, @unchecked Sendable {
+    static let maxPayloadBytes = 65_536
+
     private let continuation: AsyncStream<SystemSample>.Continuation
 
     init(continuation: AsyncStream<SystemSample>.Continuation) {
@@ -11,7 +31,9 @@ final class SampleReceiver: NSObject, LoupeSampleReceiverXPCProtocol, @unchecked
     }
 
     func deliver(sampleData: Data) {
-        if let sample = try? JSONDecoder().decode(SystemSample.self, from: sampleData) {
+        if sampleData.count <= Self.maxPayloadBytes,
+            let sample = SystemSampleWireDecoder.decode(sampleData)
+        {
             continuation.yield(sample)
         }
     }
@@ -43,17 +65,33 @@ public final class DaemonXPCClient: @unchecked Sendable {
 
     public func handshake() async -> DaemonHandshake? {
         await withCheckedContinuation { continuation in
+            let pending = HandshakeContinuation(continuation)
+            Task {
+                try? await Task.sleep(for: .seconds(3))
+                pending.resume(returning: nil)
+            }
             guard
                 let proxy = connection.remoteObjectProxyWithErrorHandler({ _ in
-                    continuation.resume(returning: nil)
+                    pending.resume(returning: nil)
                 }) as? LoupeDaemonXPCProtocol
             else {
-                continuation.resume(returning: nil)
+                pending.resume(returning: nil)
                 return
             }
-            proxy.handshake { data in
-                continuation.resume(
-                    returning: try? JSONDecoder().decode(DaemonHandshake.self, from: data))
+            proxy.handshake(clientProtocolVersion: EventProtocol.version) { data in
+                guard data.count <= 4_096,
+                    let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                    Set(object.keys) == ["daemonVersion", "protocolVersion", "pid"],
+                    let handshake = try? JSONDecoder().decode(DaemonHandshake.self, from: data),
+                    handshake.protocolVersion == EventProtocol.version,
+                    handshake.pid > 0,
+                    !handshake.daemonVersion.isEmpty,
+                    handshake.daemonVersion.utf8.count <= 128
+                else {
+                    pending.resume(returning: nil)
+                    return
+                }
+                pending.resume(returning: handshake)
             }
         }
     }
@@ -62,7 +100,8 @@ public final class DaemonXPCClient: @unchecked Sendable {
     /// deliberately not tied to the returned stream (callers may handshake
     /// without consuming samples); end it via `stopAndInvalidate()`.
     public func activate() -> AsyncStream<SystemSample> {
-        let (stream, continuation) = AsyncStream.makeStream(of: SystemSample.self)
+        let (stream, continuation) = AsyncStream.makeStream(
+            of: SystemSample.self, bufferingPolicy: .bufferingNewest(256))
         connection.exportedObject = SampleReceiver(continuation: continuation)
         connection.interruptionHandler = { continuation.finish() }
         connection.invalidationHandler = { continuation.finish() }
