@@ -201,7 +201,8 @@ final class DaemonXPCTests: XCTestCase {
         }
 
         let client = DaemonXPCClient(endpoint: .anonymous(listener.endpoint))
-        _ = client.activate()
+        let stream = client.activate()
+        defer { withExtendedLifetime(stream) {} }
         let handshake = await client.handshake()
         XCTAssertNotNil(handshake)
         client.startStream(intervalMs: 20)
