@@ -80,17 +80,6 @@ public enum ComparisonExport {
     /// CSV field sanitizer: preserve columns and prevent spreadsheet formulas
     /// from executing when filenames or report metadata are attacker-chosen.
     private static func field(_ raw: String) -> String {
-        let safe: String
-        if let first = raw.first,
-            "=+-@".contains(first) || first == "\t" || first == "\r"
-        {
-            safe = "'" + raw
-        } else {
-            safe = raw
-        }
-        return safe.contains(",") || safe.contains("\"") || safe.contains("\n")
-            || safe.contains("\r")
-            ? "\"" + safe.replacingOccurrences(of: "\"", with: "\"\"") + "\""
-            : safe
+        CSVFieldEncoder.encode(raw)
     }
 }

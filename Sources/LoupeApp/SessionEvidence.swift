@@ -181,29 +181,7 @@ extension ReplayViewModel {
     }
 
     private func csvCell(_ value: String) -> String {
-        let normalized = String(
-            value.unicodeScalars.map { scalar -> Character in
-                if scalar.value < 0x20,
-                    scalar != "\t", scalar != "\n", scalar != "\r"
-                {
-                    return "\u{FFFD}"
-                }
-                return Character(scalar)
-            })
-        let safeValue: String
-        if let firstSignificant = normalized.first(where: { !$0.isWhitespace }),
-            "=+-@".contains(firstSignificant)
-        {
-            safeValue = "'" + normalized
-        } else {
-            safeValue = normalized
-        }
-        if safeValue.contains(",") || safeValue.contains("\"") || safeValue.contains("\n")
-            || safeValue.contains("\r")
-        {
-            return "\"" + safeValue.replacingOccurrences(of: "\"", with: "\"\"") + "\""
-        }
-        return safeValue
+        CSVFieldEncoder.encode(value)
     }
 
     private func csvNumber(_ value: Double, decimals: Int) -> String {

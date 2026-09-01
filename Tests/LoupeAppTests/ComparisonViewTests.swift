@@ -91,6 +91,29 @@ final class ComparisonViewTests: XCTestCase {
                 "context_tokens,metric,'=unsafe_p50,\"candidate,name_p50\",delta_percent"))
     }
 
+    func testComparisonCSVNormalizesControlsBeforeNeutralizingFormulas() {
+        let comparison = RunComparison(
+            mismatches: [
+                .init(
+                    name: "\u{0002}+SUM(A1:A2)",
+                    baseline: "Ångström, \"測定\"",
+                    candidate: "\n@command")
+            ],
+            deltas: nil)
+        let csv = ComparisonExport.csv(
+            baselineName: "\r=baseline\u{0001}",
+            candidateName: "候補, \"β\"",
+            comparison: comparison)
+
+        XCTAssertTrue(csv.contains("\"'\r=baseline\u{FFFD}\""))
+        XCTAssertTrue(csv.contains("\"候補, \"\"β\"\"\""))
+        XCTAssertTrue(csv.contains("'\u{FFFD}+SUM(A1:A2)"))
+        XCTAssertTrue(csv.contains("\"Ångström, \"\"測定\"\"\""))
+        XCTAssertTrue(csv.contains("\"'\n@command\""))
+        XCTAssertFalse(csv.unicodeScalars.contains("\u{0001}"))
+        XCTAssertFalse(csv.unicodeScalars.contains("\u{0002}"))
+    }
+
     func testComparisonViewRendersBothStates() {
         for width in [700.0, 1_100.0] {
             let renderer = ImageRenderer(
