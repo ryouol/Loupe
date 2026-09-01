@@ -1,50 +1,67 @@
-# Distributing Loupe (direct download, no App Store)
+# Distribution pipeline
 
-Loupe ships as a DMG users download from any website and drag into
-`/Applications`. Gatekeeper requires the app to be **Developer ID signed and
-notarized** — without that, downloads are blocked on every machine but yours.
+Loupe is intended for direct distribution as an Apple Silicon DMG. The
+repository does not contain a Developer ID identity, Team ID, notary profile,
+or proof that notarization has succeeded.
 
-## One-time setup
+## Artifact names are trust labels
 
-1. Join the [Apple Developer Program](https://developer.apple.com/programs/)
-   ($99/year) with the team whose ID lives in `Local.xcconfig`.
-2. In Xcode (Settings → Accounts → Manage Certificates) create a
-   **Developer ID Application** certificate.
-3. Store notarization credentials once (uses an App Store Connect API key or
-   app-specific password):
+| Output | Meaning | Customer release? |
+|---|---|---|
+| `Loupe-x.y.z-unsigned.dmg` | CI/local package mechanics only; helper disabled; Gatekeeper rejection expected | No |
+| `Loupe-x.y.z-signed-unnotarized.dmg` | Signature validation only | No |
+| `Loupe-x.y.z.dmg` | Script completed signing, notarization, stapling, and Gatekeeper assessment | Candidate, pending owner checklist |
 
-   ```bash
-   xcrun notarytool store-credentials loupe-notary --apple-id you@example.com --team-id ABCDE12345
-   ```
+`scripts/make-dist.sh` will not give a non-notarized image the final filename.
 
-## Cutting a release
+## Credential-free checks
 
 ```bash
-LOUPE_SIGN_IDENTITY="Developer ID Application: Your Name (ABCDE12345)" \
-LOUPE_NOTARY_PROFILE=loupe-notary \
+make verify
+```
+
+This builds Swift targets, lints, checks the diff, runs Python tests, verifies
+and vulnerability-scans both dependency locks, validates the bundled sample
+and daemon plist, then runs Swift XCTest plus the Xcode app build when full
+Xcode is selected. A Command Line Tools-only host can run the remaining paths
+with
+`LOUPE_ALLOW_TOOLCHAIN_LIMITED_VERIFY=1`, but that result is explicitly
+insufficient for a signed release.
+
+CI runs the complete gate on macOS and then builds the unsigned smoke image.
+
+## Owner-only signed candidate
+
+Prerequisites:
+
+1. Apple Developer Program membership and a valid Developer ID Application
+   certificate.
+2. Full Xcode selected via `xcode-select`.
+3. A keychain notary profile created outside the repository.
+4. `Local.xcconfig` populated locally; never commit Team IDs or credentials.
+5. Counsel-approved license, privacy notice, terms, and third-party inventory.
+
+```bash
+LOUPE_SIGN_IDENTITY="Developer ID Application: …" \
+LOUPE_NOTARY_PROFILE="owner-notary-profile" \
 make dist
 ```
 
-That produces `dist/Loupe-<version>.dmg` — signed, notarized, stapled, and
-ready to upload to any static host (your site, GitHub Releases, a CDN).
-`make dist` without the env vars builds an unsigned DMG for local testing.
+The script verifies version parity and always reruns the full release gate for
+any signed artifact; the CI-attestation shortcut applies only to unsigned
+smoke packaging. It then checks arm64 binaries, bundled sample/legal resources,
+matching Developer ID app/helper Team IDs, and strict signatures. It then
+notarizes, staples, and Gatekeeper-assesses the app before preserving it in the
+DMG; the DMG is separately notarized, stapled, assessed, verified, and hashed.
 
-## What users experience
+## Manual release checklist
 
-1. Download `Loupe-x.y.z.dmg`, open it, drag Loupe to Applications.
-2. First launch: standard "downloaded from the internet" confirmation
-   (stapled notarization means no scary warnings, works offline).
-3. Installing the privileged daemon prompts once in
-   System Settings → Login Items — that flow is native `SMAppService` and
-   works exactly the same for Developer ID apps as for App Store ones.
-
-**Run from `/Applications`.** `SMAppService` refuses daemons registered from
-translocated locations (e.g. running the app directly out of the DMG or
-`~/Downloads`).
-
-## Versioning
-
-Bump **both** `MARKETING_VERSION` in `project.yml` and `Loupe.version` in
-`Sources/LoupeCore/Loupe.swift` (the version the daemon handshake and UI
-report). `make dist` refuses to build when they disagree; the DMG filename
-follows the version.
+- Run the signed helper tests in `daemon-validation.md` on each supported chip
+  family and every macOS major/security update the offer claims to support.
+- Mount the candidate on a clean non-developer Mac; install from the DMG and
+  repeat sample, real recording, history, export, quit/relaunch, and uninstall.
+- Confirm the app displays the approved legal text and support/security contact.
+- Compare the published SHA-256 to the generated sidecar.
+- Archive CI run URL, source commit, dependency locks, notary log, signatures,
+  test results, and the exact uploaded DMG.
+- Do not publish if any helper/signing/notary/Gatekeeper gate is skipped.

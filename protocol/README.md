@@ -13,7 +13,7 @@ One event per line:
 ```
 
 `ts` is `mach_continuous_time()` nanoseconds **on the emitter's clock**; the
-`clock_sync` four-timestamp handshake (t0–t3) lets the daemon map adapter
+`clock_sync` four-timestamp handshake (t0–t3) lets the app map adapter
 timestamps onto its own clock.
 
 Events: `session_start`, `clock_sync`, `model_load_start`, `model_load_end`,
@@ -28,4 +28,5 @@ The Swift types (`Sources/LoupeCore/Protocol/`) and the Python mirror
 caught by tests in both languages that round-trip the same committed examples
 under [`examples/`](examples/) and validate them against the schema. Decoders
 never crash on malformed input: every bad line becomes a typed drop reason and
-a counter bump, and lines over 64 KB are rejected before parsing.
+a counter bump, lines over 64 KB are rejected before parsing, and numeric
+ranges match the Swift `UInt32`/`UInt64` and `Int32` wire types exactly.

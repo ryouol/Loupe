@@ -1,0 +1,11 @@
+# Third-party notices
+
+Loupe directly uses GRDB.swift (MIT), Yams (MIT), and optional mlx-lm (MIT).
+Its Python build and development environment directly uses Hatchling (MIT),
+pytest (MIT), jsonschema (MIT), and Ruff (MIT). Copyright and license terms
+remain with their respective authors.
+
+Resolved Swift revisions are pinned in Package.resolved. Resolved Python
+versions and artifact hashes are pinned in adapters/loupe-mlx/uv.lock. Complete
+copyright texts, the transitive inventory, and counsel approval remain a
+release-owner gate.

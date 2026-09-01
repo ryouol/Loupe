@@ -14,9 +14,10 @@ A native macOS profiler for local AI inference on Apple Silicon. Correlates syst
 
 ```
 Sources/LoupeCore/     Shared models, timebase, XPC protocol definitions. No I/O.
-Sources/LoupeStore/    SQLite persistence (GRDB). Schema + migrations + queries.
-Sources/LoupeSampler/  Telemetry sources. Protocol + live impl + replay impl.
-Sources/loupedaemon/   Root LaunchDaemon executable. Thin. Wraps LoupeSampler over XPC.
+Sources/LoupeStore/    User-owned recording state + SQLite persistence (GRDB).
+Sources/LoupeTelemetry/ Privileged-helper allow-list: live telemetry + XPC service only.
+Sources/LoupeSampler/  User-owned replay/socket/helper-client composition.
+Sources/loupedaemon/   Root LaunchDaemon executable. Depends only on Core + Telemetry.
 Sources/LoupeApp/      SwiftUI views + view models. Library target.
 Sources/LoupeAppMain/  App entry point. Minimal — just wires LoupeApp up.
 adapters/loupe-mlx/    Python package. Instruments mlx-lm.
@@ -32,16 +33,18 @@ make bootstrap      # xcodegen + resolve deps + install python adapter in a venv
 make build          # swift build && xcodebuild -scheme Loupe -destination 'platform=macOS'
 make test           # swift test + python -m pytest adapters/
 make lint           # swift-format lint --strict
-make replay         # run the app against fixtures/baseline-session.ndjson, no root needed
+make replay         # run the app against the bundled sanitized sample, no root needed
 ```
 
 Run `make test` before declaring any task complete. If it does not pass, the task is not done.
 
 ## Architecture rules
 
-* The GUI never runs as root and never talks to a runtime adapter directly. GUI ← XPC → daemon, and adapters → Unix socket → daemon. All persistence goes through the daemon.
-* All timestamps are `mach_continuous_time()` nanoseconds. Never `Date`, never `mach_absolute_time`. Conversion helpers live in `LoupeCore/Timebase.swift` — use them.
+* The GUI never runs as root. Adapter ingest and persistence are user-owned; the root helper is telemetry-only. Adapters → owner-only Unix socket → app recorder. App ← authenticated XPC → helper.
+* Measured event/sample/state-transition timestamps are `mach_continuous_time()` nanoseconds. Never use `Date` or `mach_absolute_time` for correlation. Wall-clock dates are allowed only as explicitly named display metadata such as history creation time. Conversion helpers live in `LoupeCore/Timebase.swift`.
 * Adapters are untrusted input. Validate against the schema, bound all allocations, never `fatalError` on malformed events — drop the event and increment a counter.
+* Adapter identifiers are never filesystem names. Storage uses app-generated opaque UUIDs and owner-only permissions.
+* Production XPC fails closed without an active-console UID and a same-team/bundle signing requirement. Unsigned builds must not offer helper installation.
 * System-wide signals (GPU %, package power) and per-process signals (CPU, RSS) are different types in the model layer, not just different fields. Do not let them mix.
 
 ## Style

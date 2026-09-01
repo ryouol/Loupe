@@ -3,9 +3,9 @@
 // `make bootstrap` copies this file to Local.xcconfig (which is gitignored).
 // Never commit Local.xcconfig — it carries your Team ID and machine-local paths.
 
-// Apple Developer Team ID. Required for M0.6 (SMAppService daemon registration
-// needs a signed app). Leave empty until you have one; earlier tasks build
-// unsigned via CODE_SIGNING_ALLOWED=NO.
+// Apple Developer Team ID. Required only for the optional SMAppService helper.
+// Leave empty for local mode; unsigned builds intentionally disable helper
+// installation and build via CODE_SIGNING_ALLOWED=NO.
 DEVELOPMENT_TEAM =
 
 // Test model paths for the benchmark harness (M1+). Never hardcode ~/models/...

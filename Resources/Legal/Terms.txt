@@ -1,0 +1,20 @@
+# Terms of use draft
+
+Status: owner and legal review required before distribution.
+
+Copyright © 2026 Roy Luo. All rights reserved. Subject to payment and the
+written license grant issued by the copyright holder, a customer may install
+and use Loupe for internal development and performance analysis. Third-party
+software, models, MLX, and llama.cpp remain under their own licenses.
+
+The customer controls local session files and exports and is responsible for
+permission to process models, runtime logs, prompts, and machine telemetry.
+Findings and comparisons are diagnostic evidence, not guarantees of speed,
+compatibility, energy use, fitness, or production behavior. The optional
+helper requires explicit macOS approval; local mode remains available without
+it.
+
+Counsel-approved warranty disclaimers, liability caps, exclusions, refund
+terms, governing law, consumer-rights language, update period, supported
+systems, and support channel are required before these terms are used. This
+draft is product-planning material, not a customer agreement.

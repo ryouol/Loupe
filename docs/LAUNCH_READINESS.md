@@ -1,0 +1,76 @@
+# Launch readiness
+
+Snapshot date: 2026-09-01. This is an engineering status, not a launch claim.
+
+## Implemented
+
+- root helper reduced to telemetry-only;
+- privileged helper isolated in a source/dependency/binary allow-list that
+  excludes adapter ingest, replay, and persistence code;
+- active-console UID and runtime-derived same-team/bundle XPC requirement;
+- protocol negotiation before helper sampling;
+- owner-only, same-UID, connection/buffer/line-bounded adapter socket;
+- exact protocol and telemetry keys, field constraints, and semantic event
+  sequencing in Swift and Python;
+- opaque UUID storage names and owner-only database/sidecar/manifest/export modes;
+- exclusive 0600 temporary writes for manifests, replay pairs, adapter files,
+  and benchmark reports before atomic rename;
+- in-app start/stop state machine with denied, degraded, disconnect, reconnect,
+  interrupted, failed, and stopped history;
+- PID-owner validation and runtime event sequence checks;
+- current sanitized bundled sample and one-click sample entry points;
+- hashed JSON/CSV evidence export;
+- strict benchmark provenance and report-integrity comparison gates;
+- loopback-only llama.cpp HTTP client with redirects/proxies disabled and
+  response limits enforced while bytes arrive;
+- locked Swift and Python dependencies;
+- pinned CI actions and unsigned packaging smoke job;
+- product decision, commercial hypothesis, security, privacy, terms, licensing,
+  third-party, architecture, and distribution documentation.
+
+## Verified on this workspace host
+
+- debug and optimized `swift build`: pass with Swift 6 strict concurrency.
+- Python adapter suite: 46 passed, one optional MLX module skipped.
+- Bundled sample: 16 protocol events and 20 telemetry rows decode with zero
+  event drops.
+- Strict Swift/Ruff formatting, parse-only validation of every Swift source
+  and test file, Actionlint, ShellCheck, `git diff --check`, XcodeGen,
+  locked bootstrap, plist validation, and sample validation pass.
+- `pip-audit` reports no known vulnerabilities in the locked Python
+  development and optional MLX sets; OSV-Scanner reports no issues in the
+  Swift/Python locks.
+- `LOUPE_ALLOW_TOOLCHAIN_LIMITED_VERIFY=1 bash scripts/verify-release.sh`
+  completes and labels itself toolchain-limited.
+- Command Line Tools-only host limitation is known and detected by the release
+  script.
+
+`swift test` stops at `no such module 'XCTest'`. The package script reaches
+`xcodebuild` and then stops because the selected developer directory is
+`/Library/Developer/CommandLineTools`. No app launch, screenshot review,
+signature, helper install, DMG, or notarization result was fabricated around
+those blockers.
+
+## Blocked here, mandatory before customer release
+
+| Gate | Owner/equipment required | Pass evidence |
+|---|---|---|
+| Swift XCTest and Xcode app tests | Full Xcode 16+ | Complete test log, no failures |
+| XcodeGen app build/package | Full Xcode + XcodeGen | Release app and unsigned smoke DMG validation |
+| Developer ID signing | Certificate owner | Strict app/helper signature output |
+| XPC production identity test | Signed test clients and multiple users | Allowed/denied test log |
+| Notarization/stapling/Gatekeeper | Notary credentials + clean Mac | notary log, staple validation, `spctl` pass |
+| IOReport hardware matrix | Supported M-series machines | channel/result matrix |
+| Legal approval | Seller + counsel | approved EULA/privacy/notices |
+| Commercial operations | Seller | domain, support/security contact, checkout, tax/refund process |
+| External security review | Security owner/vendor | triaged report and resolved high findings |
+
+## No-go conditions
+
+- any privileged change without passing full Swift/XPC tests;
+- a helper that accepts unsigned, wrong-team, wrong-bundle, or wrong-user peers;
+- any artifact whose name obscures unsigned or unnotarized status;
+- benchmark deltas shown with incomplete provenance or invalid run counts;
+- legal drafts presented to customers as approved terms;
+- published claims of notarization, hardware coverage, security audit, or paid
+  customer validation without attached evidence.

@@ -1,61 +1,45 @@
-# Daemon manual validation (signed hardware run)
+# Signed helper validation
 
-What the M0.6 test suite cannot cover — real `SMAppService` registration,
-launchd, and reboot survival — is validated by hand with a signed build.
-Everything else (XPC round trip, streaming, the degraded path) is covered by
-`swift test` without root.
+The helper is optional, telemetry-only, and intentionally unusable from an
+unsigned build. These tests require a distribution-signed app on an owner
+controlled machine; do not weaken the peer validator to make local testing
+easier.
 
-## Prerequisites
+## Automated coverage
 
-1. Set your Team ID in `Local.xcconfig`: `DEVELOPMENT_TEAM = ABCDE12345`.
-2. Remove the `CODE_SIGNING_ALLOWED=NO` override for this run — build via
-   Xcode or `xcodebuild build -scheme Loupe -destination 'platform=macOS'`
-   with signing enabled so the embedded daemon gets signed too (the embed
-   script signs it with the app's identity automatically).
+Anonymous-XPC tests cover handshake version negotiation, streaming,
+invalidation cleanup, and explicit peer-policy rejection without root. They use
+`DaemonPeerValidator.currentProcessForTesting`; production uses the strict
+same-team/active-console policy.
 
-## Steps
+## Owner-only hardware steps
 
-1. **Bundle layout.** After building, verify inside `Loupe.app`:
-   `Contents/MacOS/loupedaemon` exists and is signed; the plist is at
-   `Contents/Library/LaunchDaemons/ai.squint.loupe.daemon.plist`; its
-   `Label` equals the filename (minus `.plist`).
-2. **Register.** Launch the app (from `/Applications` — SMAppService is
-   picky about translocated paths), open **Daemon** in the sidebar, click
-   **Install…**. Expected status: *Waiting for approval*; System
-   Settings → Login Items opens automatically. Headless alternative (used
-   by the scripted validation run):
+1. Build the final signed candidate and verify both executables:
 
    ```bash
-   /Applications/Loupe.app/Contents/MacOS/loupedaemon --register
-   /Applications/Loupe.app/Contents/MacOS/loupedaemon --status
+   codesign --verify --deep --strict --verbose=2 /Applications/Loupe.app
+   codesign --verify --strict --verbose=2 \
+     /Applications/Loupe.app/Contents/MacOS/loupedaemon
    ```
 
-   `--register` reports "Operation not permitted" while lodging the
-   request — status moving to `requiresApproval` is the success signal.
-3. **Approve** the daemon under "Allow in the Background", then click
-   **Refresh** in the app — status must flip to *Running* and streaming
-   starts on its own (no separate start control exists).
-4. **Stream.** Expected in the Live Telemetry section: a daemon line
-   (version + protocol + pid) from the handshake, the samples counter
-   advancing at ~10 Hz, thermal/memory values moving.
-   `sudo launchctl list | grep ai.squint.loupe` shows the daemon; its
-   stderr appears in `log stream --process loupedaemon`.
-5. **Reboot survival.** Reboot, launch the app, open Daemon, click
-   Refresh: status must still be *Running* and samples must flow without
-   reinstalling.
-6. **Client-death cleanup.** While streaming, force-quit the app (⌥⌘⎋).
-   In `log stream --process loupedaemon`, sampling must stop within a
-   second or two — the connection's invalidation handler shuts the
-   broadcaster down; a root daemon must not keep sampling for a dead
-   client.
-7. **Denial path.** Uninstall, reinstall, but this time **decline** in
-   System Settings. Expected: app keeps running, shows the observed-mode
-   banner, Install remains available, no crash, no blocked launch.
-8. **Uninstall.** Click **Uninstall**; status returns to *Not installed*
-   and `launchctl list` no longer shows the label.
+2. Confirm the helper is at `Contents/MacOS/loupedaemon`; the plist is at
+   `Contents/Library/LaunchDaemons/ai.squint.loupe.daemon.plist`; its filename,
+   `Label`, Mach service, and source constants agree.
+3. From **Telemetry**, click **Install**, approve under System Settings → Login
+   Items, and refresh. The handshake must show version 0.2.0 and protocol v1;
+   samples must advance.
+4. Run a recording. GPU/power fields should appear when IOReport resolves;
+   absent channels must remain absent, never zero-filled.
+5. Force-quit the app while streaming. The helper must stop that connection's
+   sampler. Relaunch and verify a fresh connection succeeds.
+6. Connect a separately signed/ad-hoc test client and a client under another
+   user. Both must be rejected; no handshake or samples may be delivered.
+7. Send an unsupported protocol version from an allowed test client. The reply
+   must be empty and `startSampleStream` must do nothing.
+8. Reboot, relaunch, refresh, and verify approval survives and streaming resumes.
+9. Uninstall in the app; confirm the service disappears from `launchctl`.
+10. Repeat on the supported Apple Silicon matrix. Record chip, macOS build,
+    resolved IOReport channels, result, and logs in the release evidence.
 
-## Known limits
-
-- The XPC listener does not yet verify the peer's code signature — tracked
-  as a pre-release TODO in `DaemonListenerDelegate`, blocked on Developer ID
-  distribution signing. Do not ship the daemon to customers before it lands.
+No step in this document has been completed merely because the source exists.
+The release owner must attach actual results to the candidate.
