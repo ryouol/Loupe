@@ -9,7 +9,8 @@ endpoint, or automatic cloud-sync path.
 ## Data Loupe processes
 
 - runtime metadata such as model/runtime identifiers, token counts, request
-  timing, KV-cache size, and adapter errors;
+  timing, provenance-typed KV or allocator-memory observations, and adapter
+  errors;
 - system telemetry such as memory, swap, thermal state, GPU/power when
   available, and CPU/RSS for the observed process;
 - session names you enter;

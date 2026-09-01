@@ -15,6 +15,9 @@ else
     swift format lint --strict --recursive Sources Tests adapters/loupe-llamacpp Package.swift
 fi
 
+# Check both the committed tree under review and any uncommitted remediation.
+# A bare `git diff --check` alone silently ignores defects already committed.
+git show --check --format= HEAD
 git diff --check
 
 PYTHON=".venv/bin/python"

@@ -149,7 +149,8 @@ extension ReplayViewModel {
                 ])
         }
         return SessionEvidenceReport(
-            schemaVersion: 2,
+            // v3 defines request TTFT as start → first observable output.
+            schemaVersion: 3,
             generatedAt: Date(),
             sessionName: session.name,
             eventSource: .init(
@@ -180,15 +181,26 @@ extension ReplayViewModel {
     }
 
     private func csvCell(_ value: String) -> String {
+        let normalized = String(
+            value.unicodeScalars.map { scalar -> Character in
+                if scalar.value < 0x20,
+                    scalar != "\t", scalar != "\n", scalar != "\r"
+                {
+                    return "\u{FFFD}"
+                }
+                return Character(scalar)
+            })
         let safeValue: String
-        if let first = value.first,
-            "=+-@".contains(first) || first == "\t" || first == "\r"
+        if let firstSignificant = normalized.first(where: { !$0.isWhitespace }),
+            "=+-@".contains(firstSignificant)
         {
-            safeValue = "'" + value
+            safeValue = "'" + normalized
         } else {
-            safeValue = value
+            safeValue = normalized
         }
-        if safeValue.contains(",") || safeValue.contains("\"") || safeValue.contains("\n") {
+        if safeValue.contains(",") || safeValue.contains("\"") || safeValue.contains("\n")
+            || safeValue.contains("\r")
+        {
             return "\"" + safeValue.replacingOccurrences(of: "\"", with: "\"\"") + "\""
         }
         return safeValue

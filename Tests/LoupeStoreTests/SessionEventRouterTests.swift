@@ -94,6 +94,30 @@ final class SessionEventRouterTests: XCTestCase {
         XCTAssertNotEqual(storeA.databaseURL, storeB.databaseURL)
     }
 
+    func testConcurrentThresholdFlushesPersistEveryEventOnce() async throws {
+        let router = SessionEventRouter(
+            directory: directory, host: .stub, flushThreshold: 1,
+            maxPendingPerSession: 256)
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for timestamp in 1...100 {
+                group.addTask {
+                    try await router.route(
+                        EventEnvelope(
+                            ts: UInt64(timestamp), runId: "r-concurrent", requestId: nil,
+                            payload: .modelLoadStart(.init(modelId: "m-\(timestamp)"))))
+                }
+            }
+            try await group.waitForAll()
+        }
+        try await router.flushAll()
+
+        let maybeStore = await router.persistedStore(runId: "r-concurrent")
+        let store = try XCTUnwrap(maybeStore)
+        let persisted = try await store.events()
+        XCTAssertEqual(persisted.count, 100)
+        XCTAssertEqual(Set(persisted.map(\.ts)), Set((1...100).map(UInt64.init)))
+    }
+
     func testExpectedRunAndSessionCountAreBounded() async throws {
         let pinned = SessionEventRouter(
             directory: directory, host: .stub, acceptedRunID: "expected")

@@ -1,7 +1,8 @@
 # Loupe
 
 Loupe is a local-first macOS profiler for Apple Silicon inference. It places
-model load, prefill, decode, and KV-cache events on the same timeline as
+model load, prefill, decode, and provenance-typed memory events (including
+modeled KV where defensible) on the same timeline as
 process CPU/RSS and system memory, swap, thermal, GPU, and power telemetry.
 Every finding links back to the samples and runtime events that support it.
 
@@ -46,7 +47,7 @@ both dependency lockfiles before any artifact can be packaged.
    logged-in user.
 4. Stop the recording and open it from **History**.
 
-A completed protocol-v2 recording has runtime-event and telemetry NDJSON files
+A completed protocol-v3 recording has runtime-event and telemetry NDJSON files
 plus an acquisition-metadata JSON sidecar. JSON and CSV evidence identify and
 SHA-256 hash every present source, and carry the same counts, duration, thermal
 states, replay-parser drops, and acquisition-loss summary.
@@ -71,6 +72,10 @@ GPU/power channels. Unsigned builds deliberately disable helper installation.
   can still be sensitive.
 - Loupe contains no analytics, account system, advertising SDK, or cloud
   upload path.
+
+For copy-ready MLX and llama.cpp setup, version capture, model/KV provenance,
+UI transitions, and recovery steps, see the
+[recording quickstart](docs/RECORDING_QUICKSTART.md).
 
 See [architecture](docs/ARCHITECTURE.md), [security](docs/SECURITY.md),
 [privacy](docs/PRIVACY.md), and [launch readiness](docs/LAUNCH_READINESS.md).

@@ -1,5 +1,5 @@
 """The M1.3 instrumentation API: wrap mlx-lm load/generate calls and stream
-protocol-v2 events to the Loupe app's user-owned Unix socket.
+current-protocol events to the Loupe app's user-owned Unix socket.
 
 Usage:
 
@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import math
 import os
+import threading
 import uuid
 from collections.abc import Callable
 from typing import Any, Iterator
@@ -58,8 +59,15 @@ class LoupeInstrument:
         # per-instance nonce so the restarted counter cannot reuse request
         # identifiers already persisted under the same LOUPE_RUN_ID.
         self._request_namespace = uuid.uuid4().hex
+        self._state_lock = threading.RLock()
+        # mlx-lm model operations are not made thread-safe by instrumentation.
+        # Reject overlap deterministically and keep one request lifecycle in
+        # sequence/timestamp order instead of emitting interleaved lies.
+        self._operation_active = False
         self._sequence = 0
         self._closed = False
+        self._close_requested = False
+        self._last_emitted_ts = 0
         self._emit(
             ev.SessionStart(
                 adapter="loupe-mlx",
@@ -83,161 +91,190 @@ class LoupeInstrument:
         return self._writer.connected
 
     def load(self, model_id: str, **kwargs: Any) -> tuple[Any, Any]:
-        import mlx.core as mx
-        from mlx_lm import load
-
-        event_model_id = str(model_id)[:1024] or "unknown"
-        self._emit(ev.ModelLoadStart(model_id=event_model_id))
+        self._begin_operation()
         try:
-            model, tokenizer = load(model_id, **kwargs)
-        except Exception as exc:
-            # Runtime exceptions commonly contain model cache paths, URLs,
-            # or credentials. Preserve the useful category, never the text.
+            import mlx.core as mx
+            from mlx_lm import load
+
+            event_model_id = str(model_id)[:1024] or "unknown"
+            self._emit(ev.ModelLoadStart(model_id=event_model_id))
+            try:
+                model, tokenizer = load(model_id, **kwargs)
+            except Exception as exc:
+                # Runtime exceptions commonly contain model cache paths, URLs,
+                # or credentials. Preserve the useful category, never the text.
+                self._emit(
+                    ev.ErrorEvent(
+                        code="model_load_failed",
+                        message=f"Model load failed ({type(exc).__name__})",
+                    )
+                )
+                self._emit(ev.ModelLoadEnd(model_id=event_model_id, ok=False))
+                raise
             self._emit(
-                ev.ErrorEvent(
-                    code="model_load_failed",
-                    message=f"Model load failed ({type(exc).__name__})",
+                ev.ModelLoadEnd(
+                    model_id=event_model_id,
+                    ok=True,
+                    weights_bytes=max(0, int(mx.get_active_memory())),
                 )
             )
-            self._emit(ev.ModelLoadEnd(model_id=event_model_id, ok=False))
-            raise
-        self._emit(
-            ev.ModelLoadEnd(
-                model_id=event_model_id,
-                ok=True,
-                weights_bytes=max(0, int(mx.get_active_memory())),
-            )
-        )
-        return model, tokenizer
+            return model, tokenizer
+        finally:
+            self._end_operation()
 
     def stream_generate(
         self, model: Any, tokenizer: Any, prompt: Any, **kwargs: Any
     ) -> Iterator[Any]:
-        import mlx.core as mx
-        from mlx_lm import stream_generate
-
-        self._request_counter += 1
-        request_id = f"q-{self._request_namespace}-{self._request_counter}"
-        active_at_start = max(0, int(mx.get_active_memory()))
-        request_start_ns = self._clock()
-        self._emit(ev.RequestStart(), request_id, at_ns=request_start_ns)
-
-        produced = 0
-        finish_reason = "stop"
-        prefill_done = False
-        decode_start_ns: int | None = None
-        last_response_at_ns: int | None = None
+        self._begin_operation()
         try:
-            for response in stream_generate(model, tokenizer, prompt=prompt, **kwargs):
-                response_at_ns = self._clock()
-                last_response_at_ns = response_at_ns
-                if not prefill_done:
-                    prompt_tokens = int(getattr(response, "prompt_tokens", 0) or 0)
-                    prompt_tps = float(getattr(response, "prompt_tps", 0) or 0)
-                    if math.isfinite(prompt_tps) and prompt_tps > 0 and prompt_tokens > 0:
-                        prompt_duration_ns = int(prompt_tokens / prompt_tps * 1_000_000_000)
-                        prefill_end_ns = max(
-                            request_start_ns,
-                            min(
-                                response_at_ns,
+            import mlx.core as mx
+            from mlx_lm import stream_generate
+
+            with self._state_lock:
+                self._request_counter += 1
+                request_id = f"q-{self._request_namespace}-{self._request_counter}"
+            active_at_start = max(0, int(mx.get_active_memory()))
+            request_start_ns = self._clock()
+            self._emit(ev.RequestStart(), request_id, at_ns=request_start_ns)
+
+            produced = 0
+            finish_reason = "stop"
+            prefill_done = False
+            decode_start_ns: int | None = None
+            last_response_at_ns: int | None = None
+            try:
+                for response in stream_generate(model, tokenizer, prompt=prompt, **kwargs):
+                    response_at_ns = self._clock()
+                    last_response_at_ns = response_at_ns
+                    if not prefill_done:
+                        prompt_tokens = int(getattr(response, "prompt_tokens", 0) or 0)
+                        prompt_tps = float(getattr(response, "prompt_tps", 0) or 0)
+                        if math.isfinite(prompt_tps) and prompt_tps > 0 and prompt_tokens > 0:
+                            prompt_duration_ns = int(prompt_tokens / prompt_tps * 1_000_000_000)
+                            prefill_end_ns = max(
+                                request_start_ns,
                                 min(
-                                    ev.MAX_UINT64,
-                                    request_start_ns + max(1, prompt_duration_ns),
+                                    response_at_ns,
+                                    min(
+                                        ev.MAX_UINT64,
+                                        request_start_ns + max(1, prompt_duration_ns),
+                                    ),
                                 ),
-                            ),
+                            )
+                            decode_start_ns = prefill_end_ns
+                        else:
+                            # mlx-lm exposes no first-token boundary without its
+                            # prompt timing. Keep the milestone honest but leave
+                            # the full decode interval unavailable instead of
+                            # using generation_tps, whose clock starts after token 1.
+                            prefill_end_ns = response_at_ns
+                        self._emit(
+                            ev.PrefillEnd(prompt_tokens=prompt_tokens),
+                            request_id,
+                            at_ns=prefill_end_ns,
                         )
-                        decode_start_ns = prefill_end_ns
-                    else:
-                        # mlx-lm exposes no first-token boundary without its
-                        # prompt timing. Keep the milestone honest but leave
-                        # v2 decode duration unavailable instead of dividing
-                        # by generation_tps, whose clock starts after token 1.
-                        prefill_end_ns = response_at_ns
+                        prefill_done = True
+                    produced += 1
+                    active_now = max(0, int(mx.get_active_memory()))
                     self._emit(
-                        ev.PrefillEnd(prompt_tokens=prompt_tokens),
+                        ev.DecodeTick(
+                            output_tokens=produced,
+                            active_memory_bytes=active_now,
+                            allocator_memory_growth_bytes=max(0, active_now - active_at_start),
+                            memory_provenance=ev.MemoryMetricProvenance.ALLOCATOR_DELTA_PROXY,
+                        ),
                         request_id,
-                        at_ns=prefill_end_ns,
+                        at_ns=response_at_ns,
                     )
-                    prefill_done = True
-                produced += 1
-                active_now = max(0, int(mx.get_active_memory()))
+                    raw_finish_reason = getattr(response, "finish_reason", None)
+                    if raw_finish_reason:
+                        candidate = str(raw_finish_reason).lower()
+                        finish_reason = (
+                            candidate
+                            if candidate in {"stop", "length", "eos", "cancelled"}
+                            else "other"
+                        )
+                    yield response
+            except GeneratorExit:
+                self._finish_request(
+                    request_id=request_id,
+                    output_tokens=produced,
+                    finish_reason="cancelled",
+                    decode_start_ns=decode_start_ns,
+                    # Closing a Python generator happens after control was
+                    # yielded to the consumer. Use the last runtime response
+                    # receipt, not consumer think time, as the decode boundary.
+                    ended_at_ns=last_response_at_ns,
+                )
+                raise
+            except Exception as exc:
+                failure_at_ns = self._clock()
                 self._emit(
-                    ev.DecodeTick(
-                        output_tokens=produced,
-                        # KV growth over the request baseline; the runtime has
-                        # no direct KV-size counter.
-                        kv_cache_bytes=max(0, active_now - active_at_start),
-                        active_memory_bytes=active_now,
+                    ev.ErrorEvent(
+                        code="generation_failed",
+                        message=f"Generation failed ({type(exc).__name__})",
                     ),
                     request_id,
-                    at_ns=response_at_ns,
+                    at_ns=failure_at_ns,
                 )
-                raw_finish_reason = getattr(response, "finish_reason", None)
-                if raw_finish_reason:
-                    candidate = str(raw_finish_reason).lower()
-                    finish_reason = (
-                        candidate
-                        if candidate in {"stop", "length", "eos", "cancelled"}
-                        else "other"
-                    )
-                yield response
-        except GeneratorExit:
+                self._finish_request(
+                    request_id=request_id,
+                    output_tokens=produced,
+                    finish_reason="error",
+                    decode_start_ns=decode_start_ns,
+                    ended_at_ns=failure_at_ns,
+                )
+                raise
             self._finish_request(
                 request_id=request_id,
                 output_tokens=produced,
-                finish_reason="cancelled",
+                finish_reason=finish_reason,
                 decode_start_ns=decode_start_ns,
-                # Closing a Python generator happens after control was
-                # yielded to the consumer. Use the last runtime response
-                # receipt, not consumer think time, as the decode boundary.
                 ended_at_ns=last_response_at_ns,
             )
-            raise
-        except Exception as exc:
-            failure_at_ns = self._clock()
-            self._emit(
-                ev.ErrorEvent(
-                    code="generation_failed",
-                    message=f"Generation failed ({type(exc).__name__})",
-                ),
-                request_id,
-                at_ns=failure_at_ns,
-            )
-            self._finish_request(
-                request_id=request_id,
-                output_tokens=produced,
-                finish_reason="error",
-                decode_start_ns=decode_start_ns,
-                ended_at_ns=failure_at_ns,
-            )
-            raise
-        self._finish_request(
-            request_id=request_id,
-            output_tokens=produced,
-            finish_reason=finish_reason,
-            decode_start_ns=decode_start_ns,
-            ended_at_ns=last_response_at_ns,
-        )
+        finally:
+            self._end_operation()
 
     def close(self) -> None:
-        if self._closed:
+        with self._state_lock:
+            if self._closed:
+                return
+            # Mark shutdown pending before inspecting operation state. A begin,
+            # end, and close can therefore never pass each other between an
+            # operation-lock probe and a later state update.
+            self._close_requested = True
+            operation_active = self._operation_active
+        if operation_active:
+            # Calling close between generator yields must not deadlock the
+            # caller. The active request emits request_end first and its
+            # finally block publishes the terminal transport summary.
             return
-        self._closed = True
-        # If this terminal event reaches the app, the producer-side drop count
-        # is exact for every preceding application event. If it does not, v2
-        # sequence gaps remain a lower bound and the app reports "unknown".
-        attempted = self._sequence
-        self._sequence += 1
+        self._close_transport()
+
+    def _close_transport(self) -> None:
+        with self._state_lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._close_requested = False
+            # If this terminal event reaches the app, the producer-side drop count
+            # is exact for every preceding application event. If it does not,
+            # sequence gaps remain a lower bound and the app reports "unknown".
+            attempted = self._sequence
+            self._sequence += 1
+            terminal_sequence = self._sequence
+            terminal_ts = max(self._last_emitted_ts, self._clock())
+            self._last_emitted_ts = terminal_ts
 
         def terminal(dropped: int) -> ev.Envelope:
             return ev.Envelope(
-                ts=self._clock(),
+                ts=terminal_ts,
                 run_id=self.run_id,
                 payload=ev.TransportSummary(
                     attempted_events=attempted,
                     producer_dropped_events=max(0, int(dropped)),
                 ),
-                seq=self._sequence,
+                seq=terminal_sequence,
             )
 
         finish = getattr(self._writer, "finish", None)
@@ -248,6 +285,21 @@ class LoupeInstrument:
             # change their counter between this read and the emit.
             self._writer.emit(terminal(self._writer.dropped))
             self._writer.close()
+
+    def _begin_operation(self) -> None:
+        with self._state_lock:
+            if self._closed or self._close_requested:
+                raise RuntimeError("LoupeInstrument is closed")
+            if self._operation_active:
+                raise RuntimeError("LoupeInstrument supports one active model operation")
+            self._operation_active = True
+
+    def _end_operation(self) -> None:
+        with self._state_lock:
+            self._operation_active = False
+            should_close = self._close_requested and not self._closed
+        if should_close:
+            self._close_transport()
 
     def _finish_request(
         self,
@@ -279,15 +331,19 @@ class LoupeInstrument:
         *,
         at_ns: int | None = None,
     ) -> None:
-        if self._closed:
-            return
-        self._sequence += 1
-        self._writer.emit(
-            ev.Envelope(
-                ts=at_ns if at_ns is not None else self._clock(),
-                run_id=self.run_id,
-                payload=payload,
-                request_id=request_id,
-                seq=self._sequence,
+        with self._state_lock:
+            if self._closed:
+                return
+            timestamp = at_ns if at_ns is not None else self._clock()
+            timestamp = max(self._last_emitted_ts, timestamp)
+            self._last_emitted_ts = timestamp
+            self._sequence += 1
+            self._writer.emit(
+                ev.Envelope(
+                    ts=timestamp,
+                    run_id=self.run_id,
+                    payload=payload,
+                    request_id=request_id,
+                    seq=self._sequence,
+                )
             )
-        )

@@ -159,7 +159,8 @@ public struct BenchmarkReport: Codable, Sendable, Equatable {
 }
 
 public enum BenchmarkAssembler {
-    public static let formatVersion = 2
+    /// Format v3 defines TTFT as request_start → first positive decode_tick.
+    public static let formatVersion = 3
     public static let maxReportBytes = 16 * 1_024 * 1_024
 
     /// Pure assembly: measured event streams in, stable report out. The

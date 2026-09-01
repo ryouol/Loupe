@@ -12,7 +12,8 @@ Snapshot date: 2026-09-01. This is an engineering status, not a launch claim.
 - owner-only, same-UID, connection/buffer/line-bounded adapter socket;
 - exact protocol and telemetry keys, field constraints, and semantic event
   sequencing in Swift and Python;
-- protocol-v2 event/sample sequencing, terminal producer summaries, and
+- protocol-v3 event/sample sequencing (with v2 replay compatibility), terminal
+  producer summaries, and
   durable acquisition exact/lower-bound/breakdown metadata across socket,
   XPC, SQLite, manifest, portable replay, History, UI, JSON, and CSV;
 - opaque UUID storage names and owner-only database/sidecar/manifest/export modes;
@@ -21,19 +22,31 @@ Snapshot date: 2026-09-01. This is an engineering status, not a launch claim.
 - in-app start/stop state machine with denied, degraded, disconnect, reconnect,
   interrupted, failed, and stopped history;
 - PID-owner validation and runtime event sequence checks;
-- current sanitized bundled sample and one-click sample entry points;
+- sanitized bundled sample with explicit historical-v1 provenance and
+  one-click sample entry points;
 - hashed JSON/CSV evidence export with matching filenames, SHA-256 values,
   counts, duration, thermal states, replay-parser drops, and acquisition loss;
 - unit-correct process CPU/RSS, GPU utilization, GPU power, and package-power
   analysis lanes with shared scrubbing, unavailable-channel hiding,
   metric-preserving downsampling, and accessibility summaries;
-- full-window MLX and llama.cpp decode throughput timing, including the first
-  output token, with unavailable v2 intervals omitted rather than inferred;
+- first-output TTFT plus full-window MLX and llama.cpp decode throughput timing,
+  including the first output token, with unavailable sequenced intervals
+  omitted rather than inferred;
+- provenance-typed decode memory: runtime/measured or architecture-modeled KV
+  stays distinct from MLX whole-allocator growth, and proxy/legacy values do
+  not trigger KV-specific findings;
+- single-flight, lock-serialized MLX request lifecycles with monotonic emission
+  and close-race handling;
+- prompt transport over bounded stdin/pipe paths instead of process arguments;
+- exact same-user llama.cpp listener resolution by address family, local
+  address, port, and listen state;
 - strict benchmark provenance and report-integrity comparison gates;
 - loopback-only llama.cpp HTTP client with redirects/proxies disabled and
   response limits enforced while bytes arrive;
 - locked Swift and Python dependencies;
 - pinned CI actions and unsigned packaging smoke job;
+- unique provisional DMG construction with failure cleanup, prior-artifact
+  rollback, post-gate atomic publication, and final-name checksum generation;
 - product decision, commercial hypothesis, security, privacy, terms, licensing,
   third-party, architecture, and distribution documentation.
 
@@ -41,15 +54,18 @@ Snapshot date: 2026-09-01. This is an engineering status, not a launch claim.
 
 - Debug and optimized `swift build`: pass with Apple Swift 6.2 strict
   concurrency on arm64 macOS.
-- Python adapter suite: 54 passed on Python 3.14.2; one optional live-MLX
+- Python adapter suite: 63 passed on Python 3.14.2; one optional live-MLX
   hardware module skipped because MLX was not installed in this environment.
 - Bundled legacy sample: 16 protocol events and 20 telemetry rows decode with
   zero replay-parser drops; recording-time acquisition remains correctly
   unknown because this fixture predates protocol v2 metadata.
-- A separately compiled no-XCTest runtime harness decoded the 16-line v2
-  fixture, validated its terminal summary, drove two clean Unix-socket producer
-  windows, verified exact zero acquisition loss, replayed both windows, and
-  checked matching JSON/CSV source hashes, counts, thermal state, and loss fields.
+- A separately compiled optimized no-XCTest runtime harness decoded the 16-line
+  v3 fixture with zero parser drops, validated its terminal summary, verified
+  q-1's 350 ms first-output TTFT and typed allocator-proxy memory, then decoded
+  and semantically validated all 16 v2 compatibility lines.
+- A second compiled harness opened IPv4 and IPv6-only loopback listeners and
+  verified PID resolution stays exact across UID, listen state, address family,
+  local address, and port.
 - Strict Swift/Ruff formatting, parse-only validation of every Swift source
   and test file, Actionlint, ShellCheck, `git diff --check`, XcodeGen,
   locked dependency validation, plist validation, and sample validation pass.
@@ -58,6 +74,9 @@ Snapshot date: 2026-09-01. This is an engineering status, not a launch claim.
   Swift/Python locks.
 - `LOUPE_ALLOW_TOOLCHAIN_LIMITED_VERIFY=1 bash scripts/verify-release.sh`
   completes and labels itself toolchain-limited.
+- Mocked packaging regressions preserve an existing image/checksum across
+  candidate-validation and final-checksum failures, remove hidden candidates,
+  and publish only a verified candidate; real signing/notarization was not run.
 - Command Line Tools-only host limitation is known and detected by the release
   script.
 

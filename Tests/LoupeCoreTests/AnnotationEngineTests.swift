@@ -28,11 +28,13 @@ final class AnnotationEngineTests: XCTestCase {
             ts: ts, runId: "r-a", requestId: requestId,
             payload: .decodeTick(
                 DecodeTickPayload(
-                    outputTokens: tokens, kvCacheBytes: kv, activeMemoryBytes: kv + 1)))
+                    outputTokens: tokens, kvCacheBytes: kv, activeMemoryBytes: kv + 1,
+                    memoryProvenance: .architectureModeledKV)))
     }
 
     private func request(
-        _ id: String, startTs: UInt64, prefillTs: UInt64, endTs: UInt64, tokens: UInt32 = 10
+        _ id: String, startTs: UInt64, prefillTs: UInt64, endTs: UInt64,
+        firstOutputTs: UInt64? = nil, tokens: UInt32 = 10
     ) -> [EventEnvelope] {
         [
             EventEnvelope(
@@ -41,6 +43,7 @@ final class AnnotationEngineTests: XCTestCase {
             EventEnvelope(
                 ts: prefillTs, runId: "r-a", requestId: id,
                 payload: .prefillEnd(PrefillEndPayload(promptTokens: 64))),
+            tick(ts: firstOutputTs ?? prefillTs, requestId: id, tokens: 1),
             EventEnvelope(
                 ts: endTs, runId: "r-a", requestId: id,
                 payload: .requestEnd(
@@ -144,18 +147,20 @@ final class AnnotationEngineTests: XCTestCase {
     // MARK: Rule 3 — prefill queueing
 
     func testPrefillQueueingTriggers() {
-        // Four requests at ~100ms TTFT, one at 1s: 10x the median.
+        // Prefill is identical for every request. Four first outputs arrive at
+        // 100 ms and one at 1 s, proving the rule uses observable TTFT rather
+        // than the old prefill-end surrogate.
         var events: [EventEnvelope] = []
         for index in 0..<4 {
             let base = UInt64(index + 1) * 10 * second
             events += request(
-                "q-\(index)", startTs: base, prefillTs: base + second / 10,
-                endTs: base + 2 * second)
+                "q-\(index)", startTs: base, prefillTs: base + second / 20,
+                endTs: base + 2 * second, firstOutputTs: base + second / 10)
         }
         let slowStart = 60 * second
         events += request(
-            "q-slow", startTs: slowStart, prefillTs: slowStart + second,
-            endTs: slowStart + 3 * second)
+            "q-slow", startTs: slowStart, prefillTs: slowStart + second / 20,
+            endTs: slowStart + 3 * second, firstOutputTs: slowStart + second)
 
         let found = annotations(samples: [], events: events)
             .filter { $0.kind == .prefillQueueing }
@@ -201,6 +206,34 @@ final class AnnotationEngineTests: XCTestCase {
         ]
         XCTAssertTrue(
             annotations(samples: samples, events: events)
+                .filter { $0.kind == .kvDominatedFootprint }.isEmpty)
+    }
+
+    func testAllocatorGrowthProxyNeverTriggersKVDominance() {
+        let samples = [sample(ts: 10 * second, rss: 1_000_000_000)]
+        let proxy = EventEnvelope(
+            version: EventProtocol.version, sequence: 1, ts: 10 * second,
+            runId: "r-a", requestId: "q-proxy",
+            payload: .decodeTick(
+                DecodeTickPayload(
+                    outputTokens: 1, kvCacheBytes: nil, activeMemoryBytes: 1_900_000_000,
+                    allocatorMemoryGrowthBytes: 900_000_000,
+                    memoryProvenance: .allocatorDeltaProxy)))
+        XCTAssertTrue(
+            annotations(samples: samples, events: [proxy])
+                .filter { $0.kind == .kvDominatedFootprint }.isEmpty)
+    }
+
+    func testLegacyUnprovenancedMemoryNeverTriggersKVDominance() {
+        let samples = [sample(ts: 10 * second, rss: 1_000_000_000)]
+        let legacy = EventEnvelope(
+            ts: 10 * second, runId: "r-a", requestId: "q-legacy",
+            payload: .decodeTick(
+                DecodeTickPayload(
+                    outputTokens: 1, kvCacheBytes: 900_000_000,
+                    activeMemoryBytes: 900_000_000)))
+        XCTAssertTrue(
+            annotations(samples: samples, events: [legacy])
                 .filter { $0.kind == .kvDominatedFootprint }.isEmpty)
     }
 

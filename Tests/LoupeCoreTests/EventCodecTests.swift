@@ -25,7 +25,7 @@ final class EventCodecTests: XCTestCase {
     func testValidExamplesRoundTripLosslessly() throws {
         let decoder = EventLineDecoder()
         let encoder = EventLineEncoder()
-        let lines = try exampleLines("protocol/examples/v2-events.ndjson")
+        let lines = try exampleLines("protocol/examples/v3-events.ndjson")
         XCTAssertEqual(lines.count, 16, "example file changed without updating tests")
 
         for line in lines {
@@ -48,7 +48,7 @@ final class EventCodecTests: XCTestCase {
     func testValidExamplesFormOneSemanticStream() throws {
         var validator = EventStreamValidator()
         let decoder = EventLineDecoder()
-        for line in try exampleLines("protocol/examples/v2-events.ndjson") {
+        for line in try exampleLines("protocol/examples/v3-events.ndjson") {
             let envelope = try decoder.decode(line: line).get()
             XCTAssertTrue(validator.accepts(envelope))
         }
@@ -133,14 +133,14 @@ final class EventCodecTests: XCTestCase {
 
     func testExamplesCoverEveryEventKind() throws {
         let decoder = EventLineDecoder()
-        let lines = try exampleLines("protocol/examples/v2-events.ndjson")
+        let lines = try exampleLines("protocol/examples/v3-events.ndjson")
         let kinds = lines.compactMap { try? decoder.decode(line: $0).get().kind }
         XCTAssertEqual(Set(kinds), Set(EventKind.allCases))
     }
 
     func testExtremeUnsignedValuesSurvive() throws {
         let decoder = EventLineDecoder()
-        let lines = try exampleLines("protocol/examples/v2-events.ndjson")
+        let lines = try exampleLines("protocol/examples/v3-events.ndjson")
         // One example carries UInt64.max / UInt32.max on purpose.
         guard
             let line = lines.first(where: {
@@ -156,6 +156,32 @@ final class EventCodecTests: XCTestCase {
         XCTAssertEqual(envelope.ts, UInt64.max - 2)
         XCTAssertEqual(tick.outputTokens, UInt32.max)
         XCTAssertEqual(tick.kvCacheBytes, UInt64.max)
+    }
+
+    func testProtocolV2ReplayRetainsLegacyUnprovenancedKVField() throws {
+        let lines = try exampleLines("protocol/examples/v2-events.ndjson")
+        let decoded = try lines.map { try EventLineDecoder().decode(line: $0).get() }
+        XCTAssertTrue(decoded.allSatisfy { $0.v == EventProtocol.sequencedVersion })
+        guard case .decodeTick(let tick) = decoded.first(where: { $0.kind == .decodeTick })?.payload
+        else { return XCTFail("missing v2 decode tick") }
+        XCTAssertNotNil(tick.kvCacheBytes)
+        XCTAssertNil(tick.memoryProvenance)
+    }
+
+    func testV3DecodeMemoryRequiresTruthfulExclusiveProvenance() {
+        let payloads = [
+            #"{"outputTokens":1,"kvCacheBytes":2,"activeMemoryBytes":3}"#,
+            #"{"outputTokens":1,"kvCacheBytes":2,"allocatorMemoryGrowthBytes":2,"activeMemoryBytes":3,"memoryProvenance":"allocator_delta_proxy"}"#,
+        ]
+        for payload in payloads {
+            let line = Data(
+                (#"{"v":3,"seq":1,"ts":1,"runId":"r","requestId":"q","event":"decode_tick","payload":"#
+                    + payload + "}").utf8)
+            guard case .failure(let reason) = EventLineDecoder().decode(line: line) else {
+                return XCTFail("invalid memory provenance decoded")
+            }
+            XCTAssertEqual(reason.label, "invalid_payload")
+        }
     }
 
     func testLegacyV1ReplayRemainsCompatibleWithoutSequence() throws {

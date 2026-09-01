@@ -128,12 +128,20 @@ final class SessionRecordingTests: XCTestCase {
             EventEnvelope(
                 version: EventProtocol.version, sequence: 5,
                 ts: now + 4, runId: started.runID, requestId: "q-1",
-                payload: .requestEnd(.init(outputTokens: 2, finishReason: "stop"))),
+                payload: .decodeTick(
+                    .init(
+                        outputTokens: 1, kvCacheBytes: nil, activeMemoryBytes: 1,
+                        allocatorMemoryGrowthBytes: 1,
+                        memoryProvenance: .allocatorDeltaProxy))),
             EventEnvelope(
                 version: EventProtocol.version, sequence: 6,
-                ts: now + 5, runId: started.runID, requestId: nil,
+                ts: now + 5, runId: started.runID, requestId: "q-1",
+                payload: .requestEnd(.init(outputTokens: 2, finishReason: "stop"))),
+            EventEnvelope(
+                version: EventProtocol.version, sequence: 7,
+                ts: now + 6, runId: started.runID, requestId: nil,
                 payload: .transportSummary(
-                    .init(attemptedEvents: 5, producerDroppedEvents: 0))),
+                    .init(attemptedEvents: 6, producerDroppedEvents: 0))),
         ]
         for event in applicationEvents { try send(event, to: descriptor) }
 
@@ -271,7 +279,7 @@ final class SessionRecordingTests: XCTestCase {
         _ = try await recorder.stop()
     }
 
-    func testProtocolV2CleanReconnectPreservesExactLossAndReplay() async throws {
+    func testCurrentProtocolCleanReconnectPreservesExactLossAndReplay() async throws {
         let paths = paths()
         defer {
             try? FileManager.default.removeItem(at: paths.rootDirectory.deletingLastPathComponent())
@@ -305,15 +313,23 @@ final class SessionRecordingTests: XCTestCase {
                 EventEnvelope(
                     version: EventProtocol.version, sequence: 4,
                     ts: timestamp + 3, runId: started.runID, requestId: requestID,
-                    payload: .requestEnd(
+                    payload: .decodeTick(
                         .init(
-                            outputTokens: 0, finishReason: "stop",
-                            decodeDurationNs: nil))),
+                            outputTokens: 1, kvCacheBytes: nil, activeMemoryBytes: 1,
+                            allocatorMemoryGrowthBytes: 1,
+                            memoryProvenance: .allocatorDeltaProxy))),
                 EventEnvelope(
                     version: EventProtocol.version, sequence: 5,
-                    ts: timestamp + 4, runId: started.runID, requestId: nil,
+                    ts: timestamp + 4, runId: started.runID, requestId: requestID,
+                    payload: .requestEnd(
+                        .init(
+                            outputTokens: 1, finishReason: "stop",
+                            decodeDurationNs: 1))),
+                EventEnvelope(
+                    version: EventProtocol.version, sequence: 6,
+                    ts: timestamp + 5, runId: started.runID, requestId: nil,
                     payload: .transportSummary(
-                        .init(attemptedEvents: 4, producerDroppedEvents: 0))),
+                        .init(attemptedEvents: 5, producerDroppedEvents: 0))),
             ]
             for event in events { try send(event, to: descriptor) }
 
@@ -329,13 +345,13 @@ final class SessionRecordingTests: XCTestCase {
         }
 
         let stopped = try await recorder.stop()
-        XCTAssertEqual(stopped.eventCount, 10)
+        XCTAssertEqual(stopped.eventCount, 12)
         XCTAssertEqual(stopped.acquisitionMetadata?.eventLosses.exact, 0)
 
         let replay = ReplayEventSource(fileURL: stopped.filePair.eventsURL)
         var replayed: [EventEnvelope] = []
         for await envelope in await replay.stream() { replayed.append(envelope) }
-        XCTAssertEqual(replayed.count, 10)
+        XCTAssertEqual(replayed.count, 12)
         XCTAssertEqual(replayed.filter { $0.kind == .sessionStart }.count, 2)
         XCTAssertEqual(replayed.filter { $0.kind == .transportSummary }.count, 2)
         XCTAssertEqual(SessionMetrics.perRequest(events: replayed).count, 2)

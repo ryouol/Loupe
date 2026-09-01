@@ -110,10 +110,11 @@ public struct EventLineDecoder: Sendable {
 
         let legacyEnvelopeKeys = Set(["v", "ts", "runId", "requestId", "event", "payload"])
         let allowedEnvelopeKeys =
-            version == EventProtocol.version
+            EventProtocol.versionsWithSequencing.contains(version)
             ? legacyEnvelopeKeys.union(["seq"]) : legacyEnvelopeKeys
         guard Set(object.keys).isSubset(of: allowedEnvelopeKeys),
-            version == EventProtocol.version ? object["seq"] != nil : object["seq"] == nil
+            EventProtocol.versionsWithSequencing.contains(version)
+                ? object["seq"] != nil : object["seq"] == nil
         else {
             return .failure(.invalidEnvelope("unknown field"))
         }
@@ -141,7 +142,7 @@ public struct EventLineDecoder: Sendable {
         if envelope.kind.requiresRequestID && envelope.requestId == nil {
             return .failure(.missingRequestID(envelope.kind))
         }
-        if envelope.v == EventProtocol.version, envelope.sequence == nil {
+        if EventProtocol.versionsWithSequencing.contains(envelope.v), envelope.sequence == nil {
             return .failure(.invalidEnvelope("missing seq"))
         }
         if envelope.v == EventProtocol.legacyVersion,
@@ -168,9 +169,15 @@ public struct EventLineDecoder: Sendable {
         case .modelLoadEnd: return ["modelId", "ok", "weightsBytes"]
         case .requestStart: return ["promptTokens"]
         case .prefillEnd: return ["promptTokens"]
-        case .decodeTick: return ["outputTokens", "kvCacheBytes", "activeMemoryBytes"]
-        case .requestEnd:
+        case .decodeTick:
             return version == EventProtocol.version
+                ? [
+                    "outputTokens", "kvCacheBytes", "allocatorMemoryGrowthBytes",
+                    "activeMemoryBytes", "memoryProvenance",
+                ]
+                : ["outputTokens", "kvCacheBytes", "activeMemoryBytes"]
+        case .requestEnd:
+            return version != EventProtocol.legacyVersion
                 ? ["outputTokens", "finishReason", "decodeDurationNs"]
                 : ["outputTokens", "finishReason"]
         case .transportSummary: return ["attemptedEvents", "producerDroppedEvents"]
@@ -207,15 +214,34 @@ public struct EventLineDecoder: Sendable {
             else {
                 return .invalidPayload("finishReason")
             }
+        case .decodeTick(let payload):
+            if envelope.v == EventProtocol.version {
+                switch payload.memoryProvenance {
+                case .runtimeMeasuredKV, .architectureModeledKV:
+                    guard payload.kvCacheBytes != nil,
+                        payload.allocatorMemoryGrowthBytes == nil
+                    else { return .invalidPayload("decode_tick memory provenance") }
+                case .allocatorDeltaProxy:
+                    guard payload.kvCacheBytes == nil,
+                        payload.allocatorMemoryGrowthBytes != nil
+                    else { return .invalidPayload("decode_tick memory provenance") }
+                case nil:
+                    return .invalidPayload("decode_tick memory provenance")
+                }
+            } else if payload.kvCacheBytes == nil || payload.allocatorMemoryGrowthBytes != nil
+                || payload.memoryProvenance != nil
+            {
+                return .invalidPayload("decode_tick legacy memory")
+            }
         case .transportSummary(let payload):
-            guard envelope.v == EventProtocol.version,
+            guard EventProtocol.versionsWithSequencing.contains(envelope.v),
                 payload.producerDroppedEvents <= payload.attemptedEvents
             else { return .invalidPayload("transport_summary") }
         case .error(let payload):
             guard isBoundedString(payload.code, maximum: 128), payload.message.count <= 4_096 else {
                 return .invalidPayload("error")
             }
-        case .clockSync, .requestStart, .prefillEnd, .decodeTick:
+        case .clockSync, .requestStart, .prefillEnd:
             break
         }
         return nil
@@ -288,7 +314,7 @@ public struct EventStreamValidator: Sendable {
         } else if version.map({ $0 == envelope.v }) == false {
             return false
         }
-        if envelope.v == EventProtocol.version {
+        if EventProtocol.versionsWithSequencing.contains(envelope.v) {
             guard let sequence = envelope.sequence,
                 lastSequence.map({ sequence > $0 }) ?? (sequence == 1)
             else { return false }

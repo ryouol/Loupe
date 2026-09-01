@@ -202,27 +202,32 @@ public enum AnnotationEngine {
         var annotations: [Annotation] = []
         for envelope in events {
             guard case .decodeTick(let tick) = envelope.payload,
+                let kvCacheBytes = tick.kvCacheBytes,
+                tick.memoryProvenance == .runtimeMeasuredKV
+                    || tick.memoryProvenance == .architectureModeledKV,
                 let requestId = envelope.requestId,
                 !annotatedRequests.contains(requestId),
                 let sampleIndex = nearestSampleIndex(in: samples, to: envelope.ts),
                 let process = samples[sampleIndex].process,
                 process.rssBytes > 0,
-                Double(tick.kvCacheBytes) > Double(process.rssBytes) * config.kvFraction
+                Double(kvCacheBytes) > Double(process.rssBytes) * config.kvFraction
             else { continue }
             annotatedRequests.insert(requestId)
-            let percentage = 100 * Double(tick.kvCacheBytes) / Double(process.rssBytes)
+            let percentage = 100 * Double(kvCacheBytes) / Double(process.rssBytes)
+            let provenanceLabel =
+                tick.memoryProvenance == .runtimeMeasuredKV ? "Runtime-measured" : "Modeled"
             annotations.append(
                 Annotation(
                     kind: .kvDominatedFootprint,
                     atNs: envelope.ts,
                     message:
-                        "KV cache reached \(String(format: "%.0f", percentage))% "
+                        "\(provenanceLabel) KV cache reached \(String(format: "%.0f", percentage))% "
                         + "of process memory during \(requestId).",
                     evidence: Annotation.Evidence(
                         sampleTimestamps: [samples[sampleIndex].system.ts],
                         eventTimestamps: [envelope.ts],
                         values: [
-                            "kvCacheBytes": Double(tick.kvCacheBytes),
+                            "kvCacheBytes": Double(kvCacheBytes),
                             "processRSSBytes": Double(process.rssBytes),
                         ])))
         }

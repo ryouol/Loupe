@@ -8,7 +8,7 @@ public protocol TelemetrySource: Actor {
 }
 
 extension TelemetrySource {
-    /// Sources that predate protocol v2 or cannot close an accounting window
+    /// Sources that predate sequencing or cannot close an accounting window
     /// report unknown. Callers must not turn that absence into zero loss.
     public func acquisitionStats() -> TelemetryAcquisitionStats { .unknown }
 }

@@ -59,13 +59,13 @@ def test_timestamps_are_monotonic(instrumented_run) -> None:
     assert all(ts > 0 for ts in timestamps)
 
 
-def test_ttft_is_prefill_end_minus_request_start(instrumented_run) -> None:
+def test_ttft_is_first_output_minus_request_start(instrumented_run) -> None:
     events, _ = instrumented_run
     request_start = next(e for e in events if e.event == "request_start")
     prefill_end = next(e for e in events if e.event == "prefill_end")
     first_tick = next(e for e in events if e.event == "decode_tick")
 
-    ttft_ns = prefill_end.ts - request_start.ts
+    ttft_ns = first_tick.ts - request_start.ts
     assert ttft_ns > 0
     assert ttft_ns < 60_000_000_000, "TTFT beyond a minute means broken timestamps"
     # The first token can only exist after prefill finished.
@@ -79,13 +79,16 @@ def test_memory_counters_are_plausible(instrumented_run) -> None:
     assert load_end.payload.weights_bytes > 50_000_000, "0.5B weights are >50MB"
 
     ticks = [e for e in events if e.event == "decode_tick"]
-    assert all(t.payload.active_memory_bytes >= t.payload.kv_cache_bytes for t in ticks)
-    # kv_cache_bytes is an active-memory-growth proxy: the physical KV cache
-    # grows monotonically but MLX's allocator frees interleaved buffers, so
-    # only the trend is guaranteed — some growth, never negative.
-    kv_sizes = [t.payload.kv_cache_bytes for t in ticks]
-    assert all(kv >= 0 for kv in kv_sizes)
-    assert max(kv_sizes) > 0, "decode should allocate KV-attributable memory"
+    assert all(t.payload.kv_cache_bytes is None for t in ticks)
+    assert all(t.payload.memory_provenance.value == "allocator_delta_proxy" for t in ticks)
+    # Allocator growth includes KV plus transient/interleaved buffers. It is
+    # useful memory evidence, but it is deliberately not labeled KV.
+    growth = [t.payload.allocator_memory_growth_bytes for t in ticks]
+    assert all(value is not None and value >= 0 for value in growth)
+    assert all(
+        t.payload.active_memory_bytes >= value for t, value in zip(ticks, growth, strict=True)
+    )
+    assert max(growth) > 0, "decode should produce observable allocator growth"
 
 
 @pytest.mark.skipif(

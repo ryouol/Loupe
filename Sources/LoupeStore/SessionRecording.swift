@@ -354,7 +354,7 @@ private struct RuntimeEventState: Sendable {
         } else if version.map({ $0 == envelope.v }) == false {
             return .failure(.runtimeProtocol("Protocol version changed within a connection"))
         }
-        if envelope.v == EventProtocol.version {
+        if EventProtocol.versionsWithSequencing.contains(envelope.v) {
             guard let sequence = envelope.sequence,
                 lastSequence.map({ sequence > $0 }) ?? (sequence == 1)
             else {

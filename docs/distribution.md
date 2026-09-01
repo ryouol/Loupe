@@ -13,6 +13,11 @@ or proof that notarization has succeeded.
 | `Loupe-x.y.z.dmg` | Script completed signing, notarization, stapling, and Gatekeeper assessment | Candidate, pending owner checklist |
 
 `scripts/make-dist.sh` will not give a non-notarized image the final filename.
+It builds every image in a unique hidden candidate directory. An existing
+published artifact remains intact until the new candidate passes its complete
+gate; the final same-filesystem rename is atomic, and checksum generation is
+followed by an atomic checksum-sidecar rename. A packaging or checksum failure
+cleans the candidate and restores the prior artifact.
 
 ## Credential-free checks
 

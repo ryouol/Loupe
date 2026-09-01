@@ -78,7 +78,7 @@ public struct ProcessSample: Codable, Sendable, Equatable {
 
 /// One telemetry row: both families aligned in time, never merged.
 public struct SystemSample: Codable, Sendable, Equatable {
-    /// Monotonic acquisition sequence for live protocol-v2 streams. Portable
+    /// Monotonic acquisition sequence for live protocol-v2+ streams. Portable
     /// v1 rows and third-party replay files omit it; absence means unknown,
     /// never zero loss.
     public let acquisitionSequence: UInt64?

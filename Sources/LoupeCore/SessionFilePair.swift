@@ -19,7 +19,7 @@ public enum LoupeUserRuntime {
     public static let sessionsDirectoryName = "sessions"
 }
 
-/// A recorded session is an event/telemetry pair plus optional protocol-v2
+/// A recorded session is an event/telemetry pair plus optional sequenced-protocol
 /// acquisition metadata. This type is the only owner
 /// of that convention — every layer that opens, drops, or records sessions
 /// goes through it.

@@ -1,13 +1,15 @@
 import Foundation
 
-/// Event protocol v2 — hand-written mirror of `protocol/events.schema.json`.
-/// Version 2 adds producer sequencing, a terminal transport summary, and a
-/// runtime-measured decode interval. Version 1 remains replay-only compatible
-/// so existing recordings load with acquisition integrity reported as unknown.
+/// Event protocol v3 — hand-written mirror of `protocol/events.schema.json`.
+/// Version 3 makes decode-memory provenance explicit. Version 2 remains
+/// replay-compatible with sequencing and transport summaries; version 1 has
+/// neither, so its acquisition integrity remains unknown.
 public enum EventProtocol {
-    public static let version = 2
+    public static let version = 3
+    public static let sequencedVersion = 2
     public static let legacyVersion = 1
-    public static let supportedVersions: Set<Int> = [legacyVersion, version]
+    public static let supportedVersions: Set<Int> = [legacyVersion, sequencedVersion, version]
+    public static let versionsWithSequencing: Set<Int> = [sequencedVersion, version]
 }
 
 public enum EventKind: String, Codable, Sendable, CaseIterable {
@@ -105,15 +107,37 @@ public struct PrefillEndPayload: Codable, Sendable, Equatable {
     }
 }
 
+public enum MemoryMetricProvenance: String, Codable, Sendable, Equatable {
+    /// A runtime reported its own KV allocation counter.
+    case runtimeMeasuredKV = "runtime_measured_kv"
+    /// KV bytes were calculated from declared model architecture and cache geometry.
+    case architectureModeledKV = "architecture_modeled_kv"
+    /// Total allocator growth since request start; not a KV measurement.
+    case allocatorDeltaProxy = "allocator_delta_proxy"
+}
+
 public struct DecodeTickPayload: Codable, Sendable, Equatable {
     public let outputTokens: UInt32
-    public let kvCacheBytes: UInt64
+    /// True KV bytes only. Nil when the runtime exposes only allocator growth.
+    public let kvCacheBytes: UInt64?
+    /// Whole-allocator growth proxy. It must never drive KV-specific findings.
+    public let allocatorMemoryGrowthBytes: UInt64?
     public let activeMemoryBytes: UInt64
+    /// Required on protocol v3; nil only while replaying v1/v2 evidence.
+    public let memoryProvenance: MemoryMetricProvenance?
 
-    public init(outputTokens: UInt32, kvCacheBytes: UInt64, activeMemoryBytes: UInt64) {
+    public init(
+        outputTokens: UInt32,
+        kvCacheBytes: UInt64?,
+        activeMemoryBytes: UInt64,
+        allocatorMemoryGrowthBytes: UInt64? = nil,
+        memoryProvenance: MemoryMetricProvenance? = nil
+    ) {
         self.outputTokens = outputTokens
         self.kvCacheBytes = kvCacheBytes
+        self.allocatorMemoryGrowthBytes = allocatorMemoryGrowthBytes
         self.activeMemoryBytes = activeMemoryBytes
+        self.memoryProvenance = memoryProvenance
     }
 }
 
@@ -233,7 +257,7 @@ extension EventPayload {
 
 public struct EventEnvelope: Sendable, Equatable {
     public let v: Int
-    /// Required and strictly increasing for protocol v2. Nil for legacy v1.
+    /// Required and strictly increasing for protocol v2/v3. Nil for legacy v1.
     public let sequence: UInt64?
     /// Continuous-clock ns on the *emitter's* clock; clock_sync maps it here.
     public let ts: UInt64

@@ -1,10 +1,10 @@
 import Foundation
 import LoupeCore
 
-/// Maps one streamed `/completion` exchange onto protocol-v2-capable events.
+/// Maps one streamed `/completion` exchange onto current protocol events.
 /// Per-request truth comes from the server's own `timings` object (the spec
-/// pins this): prefill_end sits at request_start + prompt_ms rather than at
-/// first-chunk arrival, which would fold network latency into TTFT.
+/// pins this) for prefill/decode duration, while TTFT ends at the directly
+/// observed first non-empty content-chunk arrival.
 public enum LlamaRequestTrace {
     public static func events(
         runId: String,
@@ -52,7 +52,18 @@ public enum LlamaRequestTrace {
             outputTokens: timings.predictedN,
             milliseconds: timings.predictedMs,
             tokensPerSecond: timings.predictedPerSecond)
-        let prefillEndNs = adding(promptDurationNs, to: requestStartNs)
+        let modeledPrefillEndNs = adding(promptDurationNs, to: requestStartNs)
+        let firstOutputArrivalNs = chunks.enumerated().first(where: { !$0.element.content.isEmpty })
+            .flatMap { indexed in
+                indexed.offset < chunkArrivalsNs.count
+                    ? chunkArrivalsNs[indexed.offset] : nil
+            }
+        // A first output cannot precede prefill completion. If hostile or
+        // inconsistent server timing says otherwise, preserve the directly
+        // observed output arrival and clamp the modeled prefill boundary back.
+        let prefillEndNs = max(
+            requestStartNs,
+            min(modeledPrefillEndNs, firstOutputArrivalNs ?? modeledPrefillEndNs))
 
         var events: [EventEnvelope] = [
             EventEnvelope(
@@ -63,11 +74,8 @@ public enum LlamaRequestTrace {
                 payload: .prefillEnd(PrefillEndPayload(promptTokens: promptTokens))),
         ]
 
-        // One tick per streamed content chunk at its arrival time, clamped
-        // forward to prefill_end: server-truth prompt_ms can postdate the
-        // first chunks' arrivals, and a tick before its own prefill would be
-        // a lie worse than a few collapsed early timestamps. KV grows by the
-        // architecture model, computed — never read — per the spec.
+        // One tick per streamed content chunk at its observed arrival time.
+        // KV grows by the architecture model, computed — never read — per the spec.
         // activeMemoryBytes stays 0: this adapter has no view into the
         // server's allocator; per-process RSS is the daemon's job.
         var produced = 0
@@ -83,7 +91,8 @@ public enum LlamaRequestTrace {
                             outputTokens: UInt32(clamping: produced),
                             kvCacheBytes: kv.bytes(
                                 forTokens: tokenTotal.overflow ? Int.max : tokenTotal.partialValue),
-                            activeMemoryBytes: 0))))
+                            activeMemoryBytes: 0,
+                            memoryProvenance: .architectureModeledKV))))
         }
 
         let modeledEnd = adding(
@@ -100,7 +109,7 @@ public enum LlamaRequestTrace {
         return sequenced(events)
     }
 
-    /// Standalone traces remain valid protocol-v2 lines in tests and file
+    /// Standalone traces remain valid current-protocol lines in tests and file
     /// sinks. The executable replaces these request-local sequence numbers
     /// with its one session-wide sequence immediately before socket output.
     private static func sequenced(_ events: [EventEnvelope]) -> [EventEnvelope] {

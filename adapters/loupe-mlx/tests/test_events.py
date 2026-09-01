@@ -134,3 +134,21 @@ def test_decode_enforces_schema_constraints(line: bytes, reason: DropReason) -> 
     with pytest.raises(EventDropped) as failure:
         decode_line(line)
     assert failure.value.reason is reason
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        '{"outputTokens":1,"kvCacheBytes":2,"activeMemoryBytes":3}',
+        '{"outputTokens":1,"kvCacheBytes":2,"allocatorMemoryGrowthBytes":2,'
+        '"activeMemoryBytes":3,"memoryProvenance":"allocator_delta_proxy"}',
+    ],
+)
+def test_v3_decode_memory_requires_truthful_exclusive_provenance(payload: str) -> None:
+    line = (
+        '{"v":3,"seq":1,"ts":1,"runId":"r","requestId":"q",'
+        f'"event":"decode_tick","payload":{payload}}}'
+    )
+    with pytest.raises(EventDropped) as failure:
+        decode_line(line)
+    assert failure.value.reason is DropReason.INVALID_PAYLOAD

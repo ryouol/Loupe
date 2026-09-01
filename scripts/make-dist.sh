@@ -44,13 +44,41 @@ else
 fi
 
 DMG="dist/${ARTIFACT_NAME}.dmg"
-STAGING="dist/package-staging"
+CHECKSUM="${DMG}.sha256"
 APP="DerivedData/Build/Products/Release/Loupe.app"
-NOTARY_ZIP="dist/.Loupe-${VERSION}-notary.zip"
+
+# All mutable packaging work lives under a unique, hidden directory on the
+# same filesystem as the published artifact. That makes the final rename
+# atomic and, more importantly, leaves an already-validated release untouched
+# when any build, signing, notarization, stapling, or assessment step fails.
+mkdir -p dist
+CANDIDATE_ROOT=$(mktemp -d "dist/.${ARTIFACT_NAME}.candidate.XXXXXX")
+CANDIDATE_DMG="${CANDIDATE_ROOT}/${ARTIFACT_NAME}.dmg"
+CANDIDATE_CHECKSUM="${CANDIDATE_ROOT}/${ARTIFACT_NAME}.dmg.sha256"
+STAGING="${CANDIDATE_ROOT}/package-staging"
+NOTARY_ZIP="${CANDIDATE_ROOT}/Loupe-${VERSION}-notary.zip"
+PRIOR_DMG="${CANDIDATE_ROOT}/prior.dmg"
+PRIOR_CHECKSUM="${CANDIDATE_ROOT}/prior.dmg.sha256"
+HAD_PRIOR_DMG=0
+HAD_PRIOR_CHECKSUM=0
+PUBLISH_STARTED=0
+PUBLISH_COMPLETE=0
 
 cleanup() {
-    rm -rf "$STAGING"
-    rm -f "$NOTARY_ZIP"
+    status=$?
+    if [[ "$status" -ne 0 && "$PUBLISH_STARTED" -eq 1 && "$PUBLISH_COMPLETE" -eq 0 ]]; then
+        if [[ "$HAD_PRIOR_DMG" -eq 1 ]]; then
+            mv -f "$PRIOR_DMG" "$DMG"
+        else
+            rm -f "$DMG"
+        fi
+        if [[ "$HAD_PRIOR_CHECKSUM" -eq 1 ]]; then
+            mv -f "$PRIOR_CHECKSUM" "$CHECKSUM"
+        fi
+    fi
+    rm -rf "$CANDIDATE_ROOT"
+    trap - EXIT
+    exit "$status"
 }
 trap cleanup EXIT
 
@@ -118,8 +146,6 @@ if [[ -n "$IDENTITY" ]]; then
         # Notarize and staple the app before copying it into the disk image.
         # A ticket stapled only to the outer DMG is insufficient evidence
         # that the installed app works offline after the image is detached.
-        mkdir -p dist
-        rm -f "$NOTARY_ZIP"
         ditto -c -k --keepParent "$APP" "$NOTARY_ZIP"
         xcrun notarytool submit "$NOTARY_ZIP" --keychain-profile "$NOTARY_PROFILE" --wait
         xcrun stapler staple "$APP"
@@ -131,23 +157,43 @@ else
     echo "UNSIGNED SMOKE ARTIFACT: helper installation is disabled and Gatekeeper will reject it." >&2
 fi
 
-mkdir -p dist
-rm -rf "$STAGING"
 mkdir -p "$STAGING"
 ditto "$APP" "$STAGING/Loupe.app"
 ln -s /Applications "$STAGING/Applications"
-rm -f "$DMG" "$DMG.sha256"
-hdiutil create -volname "Loupe" -srcfolder "$STAGING" -ov -format UDZO -quiet "$DMG"
-hdiutil verify "$DMG"
+hdiutil create -volname "Loupe" -srcfolder "$STAGING" -ov -format UDZO -quiet "$CANDIDATE_DMG"
+hdiutil verify "$CANDIDATE_DMG"
 
-if [[ -n "$NOTARY_PROFILE" ]]; then
-    xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
-    xcrun stapler staple "$DMG"
-    xcrun stapler validate "$DMG"
-    spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG"
+if [[ -n "$IDENTITY" ]]; then
+    codesign --force --timestamp --sign "$IDENTITY" "$CANDIDATE_DMG"
+    codesign --verify --strict --verbose=2 "$CANDIDATE_DMG"
+    hdiutil verify "$CANDIDATE_DMG"
 fi
 
-shasum -a 256 "$DMG" > "$DMG.sha256"
+if [[ -n "$NOTARY_PROFILE" ]]; then
+    xcrun notarytool submit "$CANDIDATE_DMG" --keychain-profile "$NOTARY_PROFILE" --wait
+    xcrun stapler staple "$CANDIDATE_DMG"
+    xcrun stapler validate "$CANDIDATE_DMG"
+    # Stapling mutates the image, so validate the final candidate bytes again.
+    codesign --verify --strict --verbose=2 "$CANDIDATE_DMG"
+    hdiutil verify "$CANDIDATE_DMG"
+    spctl --assess --type open --context context:primary-signature --verbose=2 "$CANDIDATE_DMG"
+fi
+
+# Publishing is the sole operation that replaces an existing valid image.
+# mv(1) is atomic here because the candidate and destination share `dist/`.
+if [[ -f "$DMG" ]]; then
+    cp -p "$DMG" "$PRIOR_DMG"
+    HAD_PRIOR_DMG=1
+fi
+if [[ -f "$CHECKSUM" ]]; then
+    cp -p "$CHECKSUM" "$PRIOR_CHECKSUM"
+    HAD_PRIOR_CHECKSUM=1
+fi
+PUBLISH_STARTED=1
+mv -f "$CANDIDATE_DMG" "$DMG"
+shasum -a 256 "$DMG" > "$CANDIDATE_CHECKSUM"
+mv -f "$CANDIDATE_CHECKSUM" "$CHECKSUM"
+PUBLISH_COMPLETE=1
 if [[ -n "$NOTARY_PROFILE" ]]; then
     echo "Release candidate produced: $DMG"
 else

@@ -102,8 +102,8 @@ public struct ResultsView: View {
                 title: "Decode Rate vs Context", symbol: "speedometer",
                 unit: "decode tok/s (p50 ± σ)", tint: .teal, metric: \.decode)
             sweepChart(
-                title: "Time to First Token vs Context", symbol: "timer",
-                unit: "TTFT ms (p50 ± σ)", tint: .indigo, metric: \.ttft)
+                title: model.latencyChartTitle, symbol: "timer",
+                unit: model.latencyAxisTitle, tint: .indigo, metric: \.ttft)
         }
     }
 
@@ -152,7 +152,7 @@ public struct ResultsView: View {
                     Text("#\(row.runIndex + 1)").foregroundStyle(.secondary)
                 }
                 .width(50)
-                TableColumn("TTFT") { row in
+                TableColumn(model.latencyColumnTitle) { row in
                     Text(String(format: "%.1f ms", row.ttftMs)).monospacedDigit()
                 }
                 .width(100)

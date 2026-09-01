@@ -188,7 +188,7 @@ public actor ReplayTelemetrySource: TelemetrySource {
     }
 }
 
-/// Replays a `<name>.ndjson` file of protocol-v2 or legacy-v1 event lines.
+/// Replays a `<name>.ndjson` file of protocol-v3 or compatible v1/v2 event lines.
 public actor ReplayEventSource {
     private let fileURL: URL
     private let preloadedData: Data?

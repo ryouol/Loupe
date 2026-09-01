@@ -1,4 +1,4 @@
-"""Fixture recorder: a real mlx-lm session written as protocol-v2 events.
+"""Fixture recorder: a real mlx-lm session written as current-protocol events.
 
 A thin loop over the same `LoupeInstrument` the live adapter uses, pointed at
 a file sink — recorder events and adapter events cannot drift apart because
@@ -35,7 +35,7 @@ PROMPTS = [
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="loupe_mlx.record",
-        description="Record a real mlx-lm session as protocol-v2 NDJSON events.",
+        description="Record a real mlx-lm session as current-protocol NDJSON events.",
     )
     parser.add_argument("--model", required=True, help="HF repo id or local path")
     parser.add_argument("--out", required=True, help="output .ndjson path")

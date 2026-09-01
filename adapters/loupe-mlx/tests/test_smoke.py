@@ -1,4 +1,5 @@
 import sys
+import threading
 import types
 
 import pytest
@@ -152,8 +153,11 @@ def test_one_token_early_stop_includes_first_token_interval(monkeypatch) -> None
     loupe.close()
 
     end = next(event.payload for event in sink.events if event.event == "request_end")
+    request_start = next(event for event in sink.events if event.event == "request_start")
+    first_output = next(event for event in sink.events if event.event == "decode_tick")
     assert end.output_tokens == 1
     assert end.finish_reason == "eos"
+    assert first_output.ts - request_start.ts == 140_000_000
     assert end.decode_duration_ns == 40_000_000
     assert end.output_tokens / (end.decode_duration_ns / 1_000_000_000) == 25.0
     summary = next(event.payload for event in sink.events if event.event == "transport_summary")
@@ -201,3 +205,66 @@ def test_terminal_summary_reports_adapter_queue_loss() -> None:
     summary = sink.events[-1].payload
     assert summary.producer_dropped_events == 1
     assert summary.attempted_events == 2
+
+
+def test_reordered_clock_reads_are_clamped_to_monotonic_emission() -> None:
+    sink = CollectingSink()
+    loupe = LoupeInstrument(run_id="r-clock", writer=sink, clock=SequenceClock([300, 200, 100]))
+    loupe.close()
+
+    assert [event.event for event in sink.events] == [
+        "session_start",
+        "clock_sync",
+        "transport_summary",
+    ]
+    assert [event.ts for event in sink.events] == [300, 300, 300]
+
+
+def test_concurrent_generation_is_rejected_and_close_waits_for_request_end(monkeypatch) -> None:
+    entered_runtime = threading.Event()
+    release_runtime = threading.Event()
+    response = types.SimpleNamespace(prompt_tokens=1, prompt_tps=1.0, finish_reason="stop")
+
+    def generate(*_args, **_kwargs):
+        entered_runtime.set()
+        assert release_runtime.wait(timeout=2)
+        yield response
+
+    install_fake_runtime(monkeypatch, generate)
+    sink = CollectingSink()
+    loupe = LoupeInstrument(run_id="r-concurrent", writer=sink)
+    failures: list[BaseException] = []
+
+    def consume() -> None:
+        try:
+            list(loupe.stream_generate(object(), object(), prompt="first"))
+        except BaseException as exc:  # pragma: no cover - asserted below
+            failures.append(exc)
+
+    worker = threading.Thread(target=consume)
+    worker.start()
+    assert entered_runtime.wait(timeout=2)
+
+    with pytest.raises(RuntimeError, match="one active"):
+        list(loupe.stream_generate(object(), object(), prompt="second"))
+
+    closers = [threading.Thread(target=loupe.close) for _ in range(4)]
+    for closer in closers:
+        closer.start()
+    for closer in closers:
+        closer.join(timeout=2)
+    assert not any(closer.is_alive() for closer in closers)
+    assert not any(event.event == "transport_summary" for event in sink.events)
+
+    release_runtime.set()
+    worker.join(timeout=2)
+    assert not worker.is_alive()
+    assert failures == []
+
+    kinds = [event.event for event in sink.events]
+    assert kinds[-2:] == ["request_end", "transport_summary"]
+    assert kinds.count("transport_summary") == 1
+    assert [event.seq for event in sink.events] == list(range(1, len(sink.events) + 1))
+    assert [event.ts for event in sink.events] == sorted(event.ts for event in sink.events)
+    with pytest.raises(RuntimeError, match="closed"):
+        list(loupe.stream_generate(object(), object(), prompt="after-close"))

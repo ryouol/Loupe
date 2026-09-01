@@ -1,5 +1,22 @@
 import LoupeCore
 
+private actor CooldownObservation {
+    private var nominalSince: ContinuousClock.Instant?
+
+    func observe(_ state: ThermalState, at instant: ContinuousClock.Instant) {
+        if state == .nominal {
+            if nominalSince == nil { nominalSince = instant }
+        } else {
+            nominalSince = nil
+        }
+    }
+
+    func isStable(at instant: ContinuousClock.Instant, for dwell: Duration) -> Bool {
+        guard let nominalSince else { return false }
+        return instant - nominalSince >= dwell
+    }
+}
+
 /// Between benchmark runs the machine must return to thermal nominal or the
 /// next run measures the previous run's heat. The gate must never hang: a
 /// machine that won't cool (small chassis, hot room) times out cleanly and
@@ -17,21 +34,24 @@ public enum CooldownGate {
         clock: ContinuousClock = ContinuousClock()
     ) async -> Outcome {
         await withTaskGroup(of: Outcome.self) { group in
+            let observation = CooldownObservation()
             group.addTask {
-                var nominalSince: ContinuousClock.Instant?
                 for await state in states {
-                    if state == .nominal {
-                        let now = clock.now
-                        if nominalSince == nil { nominalSince = now }
-                        if let nominalSince, now - nominalSince >= stableFor {
-                            return .nominal
-                        }
-                    } else {
-                        nominalSince = nil
-                    }
+                    await observation.observe(state, at: clock.now)
                 }
                 // Stream ended without reaching nominal: treat as timeout
                 // rather than spinning forever on a dead stream.
+                return .timedOut
+            }
+            group.addTask {
+                let cadence: Duration =
+                    stableFor < .milliseconds(100) ? .milliseconds(5) : .milliseconds(100)
+                while !Task.isCancelled {
+                    if await observation.isStable(at: clock.now, for: stableFor) {
+                        return .nominal
+                    }
+                    try? await clock.sleep(for: cadence)
+                }
                 return .timedOut
             }
             group.addTask {

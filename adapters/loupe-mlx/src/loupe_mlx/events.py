@@ -1,4 +1,4 @@
-"""Event protocol v2 — Python mirror of ``protocol/events.schema.json``.
+"""Event protocol v3 — Python mirror of ``protocol/events.schema.json``.
 
 Drift against the Swift types is caught by cross-language round-trip and
 schema-conformance tests. Legacy v1 recordings remain decode-compatible.
@@ -11,8 +11,15 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, ClassVar, Union, get_args
 
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
+SEQUENCED_PROTOCOL_VERSION = 2
 LEGACY_PROTOCOL_VERSION = 1
+SUPPORTED_PROTOCOL_VERSIONS = {
+    LEGACY_PROTOCOL_VERSION,
+    SEQUENCED_PROTOCOL_VERSION,
+    PROTOCOL_VERSION,
+}
+SEQUENCED_PROTOCOL_VERSIONS = {SEQUENCED_PROTOCOL_VERSION, PROTOCOL_VERSION}
 # Shared with the schema (x-limits.maxLineBytes) and the Swift decoder;
 # conformance tests in both languages pin the three together.
 MAX_LINE_BYTES = 65536
@@ -31,6 +38,12 @@ class DropReason(str, Enum):
     INVALID_ENVELOPE = "invalid_envelope"
     INVALID_PAYLOAD = "invalid_payload"
     MISSING_REQUEST_ID = "missing_request_id"
+
+
+class MemoryMetricProvenance(str, Enum):
+    RUNTIME_MEASURED_KV = "runtime_measured_kv"
+    ARCHITECTURE_MODELED_KV = "architecture_modeled_kv"
+    ALLOCATOR_DELTA_PROXY = "allocator_delta_proxy"
 
 
 class EventDropped(Exception):
@@ -219,23 +232,50 @@ class PrefillEnd:
 class DecodeTick:
     EVENT: ClassVar[str] = "decode_tick"
     output_tokens: int
-    kv_cache_bytes: int
     active_memory_bytes: int
+    kv_cache_bytes: int | None = None
+    allocator_memory_growth_bytes: int | None = None
+    memory_provenance: MemoryMetricProvenance | None = None
 
     def to_json_payload(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "outputTokens": self.output_tokens,
-            "kvCacheBytes": self.kv_cache_bytes,
             "activeMemoryBytes": self.active_memory_bytes,
         }
+        if self.kv_cache_bytes is not None:
+            payload["kvCacheBytes"] = self.kv_cache_bytes
+        if self.allocator_memory_growth_bytes is not None:
+            payload["allocatorMemoryGrowthBytes"] = self.allocator_memory_growth_bytes
+        if self.memory_provenance is not None:
+            payload["memoryProvenance"] = self.memory_provenance.value
+        return payload
 
     @classmethod
     def from_json_payload(cls, obj: dict[str, Any]) -> "DecodeTick":
-        _reject_extra_keys(obj, {"outputTokens", "kvCacheBytes", "activeMemoryBytes"})
+        _reject_extra_keys(
+            obj,
+            {
+                "outputTokens",
+                "kvCacheBytes",
+                "allocatorMemoryGrowthBytes",
+                "activeMemoryBytes",
+                "memoryProvenance",
+            },
+        )
+        provenance_value = obj.get("memoryProvenance")
+        if provenance_value is None:
+            provenance = None
+        else:
+            try:
+                provenance = MemoryMetricProvenance(provenance_value)
+            except (TypeError, ValueError):
+                raise _payload_error("memoryProvenance") from None
         return cls(
             output_tokens=_req_uint(obj, "outputTokens", MAX_UINT32),
-            kv_cache_bytes=_req_uint(obj, "kvCacheBytes"),
             active_memory_bytes=_req_uint(obj, "activeMemoryBytes"),
+            kv_cache_bytes=_opt_uint(obj, "kvCacheBytes"),
+            allocator_memory_growth_bytes=_opt_uint(obj, "allocatorMemoryGrowthBytes"),
+            memory_provenance=provenance,
         )
 
 
@@ -375,7 +415,7 @@ def decode_line(raw: bytes | str) -> Envelope:
         raise EventDropped(DropReason.MALFORMED_JSON, "v is not an integer")
     if version is None:
         raise EventDropped(DropReason.INVALID_ENVELOPE, "missing v")
-    if version not in {LEGACY_PROTOCOL_VERSION, PROTOCOL_VERSION}:
+    if version not in SUPPORTED_PROTOCOL_VERSIONS:
         raise EventDropped(DropReason.UNSUPPORTED_VERSION, str(version))
 
     event = obj.get("event")
@@ -388,12 +428,12 @@ def decode_line(raw: bytes | str) -> Envelope:
         raise EventDropped(DropReason.UNKNOWN_EVENT, event)
 
     allowed_envelope = {"v", "ts", "runId", "requestId", "event", "payload"}
-    if version == PROTOCOL_VERSION:
+    if version in SEQUENCED_PROTOCOL_VERSIONS:
         allowed_envelope.add("seq")
     if not set(obj).issubset(allowed_envelope):
         raise EventDropped(DropReason.INVALID_ENVELOPE, "unknown field")
     seq = obj.get("seq")
-    if version == PROTOCOL_VERSION:
+    if version in SEQUENCED_PROTOCOL_VERSIONS:
         if not isinstance(seq, int) or isinstance(seq, bool) or not 1 <= seq <= MAX_UINT64:
             raise EventDropped(DropReason.INVALID_ENVELOPE, "seq")
     elif seq is not None or event == TransportSummary.EVENT:
@@ -417,6 +457,31 @@ def decode_line(raw: bytes | str) -> Envelope:
     if version == LEGACY_PROTOCOL_VERSION and event == RequestEnd.EVENT:
         _reject_extra_keys(payload_obj, {"outputTokens", "finishReason"})
     payload = payload_type.from_json_payload(payload_obj)
+    if isinstance(payload, DecodeTick):
+        if version == PROTOCOL_VERSION:
+            true_kv = payload.memory_provenance in {
+                MemoryMetricProvenance.RUNTIME_MEASURED_KV,
+                MemoryMetricProvenance.ARCHITECTURE_MODELED_KV,
+            }
+            allocator_proxy = (
+                payload.memory_provenance is MemoryMetricProvenance.ALLOCATOR_DELTA_PROXY
+            )
+            if true_kv and (
+                payload.kv_cache_bytes is None or payload.allocator_memory_growth_bytes is not None
+            ):
+                raise _payload_error("decode_tick memory provenance")
+            if allocator_proxy and (
+                payload.kv_cache_bytes is not None or payload.allocator_memory_growth_bytes is None
+            ):
+                raise _payload_error("decode_tick memory provenance")
+            if not true_kv and not allocator_proxy:
+                raise _payload_error("decode_tick memory provenance")
+        elif (
+            payload.kv_cache_bytes is None
+            or payload.allocator_memory_growth_bytes is not None
+            or payload.memory_provenance is not None
+        ):
+            raise _payload_error("decode_tick legacy memory")
     if isinstance(payload, RequestEnd):
         if payload.decode_duration_ns is not None and payload.decode_duration_ns == 0:
             raise EventDropped(DropReason.INVALID_PAYLOAD, "decodeDurationNs")

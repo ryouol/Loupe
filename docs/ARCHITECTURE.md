@@ -7,7 +7,7 @@ available to an unprivileged process.
 
 ```text
 MLX / llama.cpp adapter (user UID)
-        │ protocol-v2 NDJSON: monotonic seq + terminal loss summary
+        │ protocol-v3 NDJSON: monotonic seq + terminal loss summary
         ▼
 owner-only Unix socket in ~/Library/Application Support/Loupe/runtime
         │ same-UID + bounded + schema/sequence/PID validation
@@ -64,7 +64,7 @@ non-terminal manifest as `interrupted`; it does not invent a successful stop.
   a 16-connection default and hard maximum of 64) plus bounded command/event
   streams;
 - a 64 KiB unterminated-line cap;
-- strict v2 envelope and payload keys, lengths, positive PID, request IDs,
+- strict v3 envelope and payload keys, lengths, positive PID, request IDs,
   monotonic producer sequence, and terminal transport summary (with replay-only
   v1 compatibility);
 - an expected run ID, event sequencing/timestamps, monotonic decode tokens, and a claimed
@@ -107,11 +107,15 @@ Runtime and telemetry timestamps use `mach_continuous_time` nanoseconds.
 `clock_sync` maps another emitter clock before metrics or annotations are
 computed. System-wide and per-process values remain different Swift types,
 tables, and visual lanes; package power is never attributed to one PID.
+TTFT is request start to the first positive output tick, not prefill end.
+Protocol v3 also makes decode-memory provenance explicit: MLX allocator growth
+is a non-KV proxy, llama.cpp KV is architecture-modeled from declared geometry,
+and legacy unprovenanced values cannot trigger KV-specific findings.
 
 ## Replay and evidence
 
 Every completed recording produces `<opaque-id>.ndjson` plus
-`<opaque-id>.system.ndjson`, plus `<opaque-id>.metadata.json` for protocol-v2
+`<opaque-id>.system.ndjson`, plus `<opaque-id>.metadata.json` for sequenced
 acquisition integrity. Replay parses the data files independently with counted
 parser drops, hard file/row limits, and unified clocks. Analysis retains the
 union of significant indices across memory, swap, process RSS/CPU, GPU%, GPU

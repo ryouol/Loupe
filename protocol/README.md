@@ -4,12 +4,12 @@ Versioned NDJSON event schema — the source of truth for every adapter.
 [`events.schema.json`](events.schema.json) is the contract. Changing it means
 bumping `v`, updating fixtures, and updating every adapter in the same commit.
 
-## v2 envelope
+## v3 envelope
 
 One event per line:
 
 ```json
-{"v":2,"seq":7,"ts":123456789,"runId":"...","requestId":"...","event":"decode_tick","payload":{...}}
+{"v":3,"seq":7,"ts":123456789,"runId":"...","requestId":"...","event":"decode_tick","payload":{...}}
 ```
 
 `ts` is `mach_continuous_time()` nanoseconds **on the emitter's clock**; the
@@ -22,7 +22,17 @@ terminal `transport_summary`.
 `request_*`, `prefill_end`, and `decode_tick` require a `requestId`. It is
 unique for the lifetime of a logical `runId`, including after an adapter
 process relaunch, so request evidence cannot alias an earlier window.
-`decode_tick` carries `outputTokens`, `kvCacheBytes`, `activeMemoryBytes`.
+`decode_tick` carries cumulative `outputTokens`, `activeMemoryBytes`, and one
+typed memory observation:
+
+- `kvCacheBytes` with `runtime_measured_kv` or
+  `architecture_modeled_kv`; or
+- `allocatorMemoryGrowthBytes` with `allocator_delta_proxy`.
+
+Allocator growth includes non-KV allocations and never drives KV-specific
+findings. The timestamp of the first tick whose `outputTokens` is greater than
+zero is the observable first-output boundary. Loupe defines TTFT as
+`request_start` → that timestamp; `prefill_end` is not mislabeled as TTFT.
 
 `seq` starts at one and increases once for every attempted application event.
 The terminal summary uses the next sequence number and reports how many prior
@@ -45,22 +55,24 @@ still replayable, but any unclosed or invalid window leaves the total unknown.
 
 `request_end.decodeDurationNs`, when present, is the runtime-measured full
 `prefill_end` → `request_end` generation interval, including the first output
-token. A v2 request with output tokens but no defensible interval is omitted
-from throughput metrics rather than publishing a partial-window rate.
+token. A sequenced request with output tokens but no defensible interval is
+omitted from throughput metrics rather than publishing a partial-window rate.
 
-## Legacy v1 replay
+## v1/v2 replay
 
-Version 1 remains accepted for imported and existing recordings. It has no
-`seq`, terminal summary, or runtime decode interval. Loupe therefore labels its
-recording-time acquisition loss as unknown; replay parser drops are still
-recomputed from the source bytes. New adapters must emit v2.
+Version 2 remains accepted with sequencing, terminal summaries, and runtime
+decode intervals, but its `kvCacheBytes` has no typed provenance. Version 1
+also remains accepted; it has no `seq`, terminal summary, or runtime decode
+interval. Loupe therefore labels v1 recording-time acquisition loss as
+unknown; replay parser drops are still recomputed from source bytes. New
+adapters must emit v3.
 
 ## Implementations
 
 The Swift types (`Sources/LoupeCore/Protocol/`) and the Python mirror
 (`adapters/loupe-mlx/src/loupe_mlx/events.py`) are hand-written; drift is
 caught by tests in both languages that round-trip the same committed examples
-under [`examples/`](examples/) and validate v2 against the schema. Decoders
+under [`examples/`](examples/) and validate v3 against the schema. Decoders
 never crash on malformed input: every bad line becomes a typed drop reason and
 a counter bump, lines over 64 KB are rejected before parsing, and numeric
 ranges match the Swift `UInt32`/`UInt64` and `Int32` wire types exactly.

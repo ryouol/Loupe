@@ -8,6 +8,45 @@ import XCTest
 /// Everything here runs from the recorded fixtures under fixtures/llamacpp/
 /// — no live server needed, per the acceptance.
 final class LoupeLlamaCppTests: XCTestCase {
+    func testPromptInputIsBoundedAndInlinePromptIsRejected() throws {
+        func handle(_ data: Data) throws -> FileHandle {
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("loupe-prompt-\(UUID().uuidString)")
+            try data.write(to: url, options: .withoutOverwriting)
+            addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+            return try FileHandle(forReadingFrom: url)
+        }
+
+        let maximum = Data(repeating: UInt8(ascii: "s"), count: PromptInput.maxBytes)
+        let maximumHandle = try handle(maximum)
+        defer { try? maximumHandle.close() }
+        XCTAssertEqual(try PromptInput.read(from: maximumHandle).utf8.count, PromptInput.maxBytes)
+
+        let oversizedHandle = try handle(maximum + Data([UInt8(ascii: "x")]))
+        defer { try? oversizedHandle.close() }
+        XCTAssertThrowsError(try PromptInput.read(from: oversizedHandle)) { error in
+            XCTAssertEqual(error as? PromptInputError, .tooLarge)
+        }
+
+        let invalidHandle = try handle(Data([0xFF]))
+        defer { try? invalidHandle.close() }
+        XCTAssertThrowsError(try PromptInput.read(from: invalidHandle)) { error in
+            XCTAssertEqual(error as? PromptInputError, .invalidUTF8)
+        }
+
+        let secret = "customer prompt must not appear in argv"
+        XCTAssertThrowsError(
+            try PromptInput.validateCommandLine(["--prompt", secret])
+        ) { error in
+            XCTAssertEqual(error as? PromptInputError, .inlinePromptUnsupported)
+        }
+        XCTAssertThrowsError(try PromptInput.validateCommandLine(["--prompt=customer-secret"])) {
+            error in
+            XCTAssertEqual(error as? PromptInputError, .inlinePromptUnsupported)
+        }
+        XCTAssertNoThrow(try PromptInput.validateCommandLine(["--prompt-stdin"]))
+    }
+
     private static let fixtures = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
         .deletingLastPathComponent()
@@ -218,6 +257,7 @@ final class LoupeLlamaCppTests: XCTestCase {
 
         let metric = SessionMetrics.perRequest(events: events).first
         XCTAssertEqual(metric?.outputTokens, 1)
+        XCTAssertEqual(metric?.ttftNs, 1)
         XCTAssertEqual(metric?.decodeDurationNs, 50_000_000)
         XCTAssertEqual(metric?.decodeTokensPerSecond ?? -1, 20, accuracy: 0.001)
     }
@@ -282,11 +322,49 @@ final class LoupeLlamaCppTests: XCTestCase {
         XCTAssertGreaterThan(port, 0)
 
         XCTAssertEqual(
-            ListeningPortResolver.pid(listeningOn: port),
+            ListeningPortResolver.pid(listeningAt: "127.0.0.1", port: port),
             ProcessInfo.processInfo.processIdentifier)
+        XCTAssertNil(ListeningPortResolver.pid(listeningAt: "::1", port: port))
+        XCTAssertNil(ListeningPortResolver.pid(listeningAt: "127.0.0.2", port: port))
         XCTAssertNil(
-            ListeningPortResolver.pid(listeningOn: 1),
+            ListeningPortResolver.pid(listeningAt: "127.0.0.1", port: 1),
             "nothing listens on port 1 without root")
+    }
+
+    func testResolverDistinguishesIPv6ListenerFromIPv4OnSamePortNumber() throws {
+        let fd = socket(AF_INET6, SOCK_STREAM, 0)
+        XCTAssertGreaterThanOrEqual(fd, 0)
+        defer { close(fd) }
+        var ipv6Only: Int32 = 1
+        XCTAssertEqual(
+            setsockopt(
+                fd, IPPROTO_IPV6, IPV6_V6ONLY, &ipv6Only,
+                socklen_t(MemoryLayout<Int32>.size)),
+            0)
+        var address = sockaddr_in6()
+        address.sin6_family = sa_family_t(AF_INET6)
+        address.sin6_addr = in6addr_loopback
+        address.sin6_port = 0
+        let bound = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in6>.size))
+            }
+        }
+        XCTAssertEqual(bound, 0)
+        XCTAssertEqual(listen(fd, 1), 0)
+
+        var assigned = sockaddr_in6()
+        var size = socklen_t(MemoryLayout<sockaddr_in6>.size)
+        _ = withUnsafeMutablePointer(to: &assigned) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                getsockname(fd, $0, &size)
+            }
+        }
+        let port = UInt16(bigEndian: assigned.sin6_port)
+        XCTAssertEqual(
+            ListeningPortResolver.pid(listeningAt: "::1", port: port),
+            ProcessInfo.processInfo.processIdentifier)
+        XCTAssertNil(ListeningPortResolver.pid(listeningAt: "127.0.0.1", port: port))
     }
 
     func testSocketWriterReconnectsWhenListenerAppears() throws {

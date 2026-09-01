@@ -93,7 +93,7 @@ final class LoupeAppTests: XCTestCase {
         XCTAssertEqual(model.acquisitionMetadata, metadata)
         let report = try JSONDecoder().decode(
             SessionEvidenceReport.self, from: model.evidenceJSON())
-        XCTAssertEqual(report.schemaVersion, 2)
+        XCTAssertEqual(report.schemaVersion, 3)
         XCTAssertEqual(report.sessionName, "mini")
         XCTAssertEqual(report.eventSource.filename, "mini.ndjson")
         XCTAssertEqual(report.eventSource.sha256.count, 64)
@@ -172,7 +172,7 @@ final class LoupeAppTests: XCTestCase {
 
         let report = try JSONDecoder().decode(
             SessionEvidenceReport.self, from: model.evidenceJSON())
-        XCTAssertEqual(report.schemaVersion, 2)
+        XCTAssertEqual(report.schemaVersion, 3)
         XCTAssertEqual(report.eventSource.sha256.count, 64)
         XCTAssertEqual(report.telemetrySource.sha256.count, 64)
         XCTAssertEqual(report.eventCount, 16)
@@ -206,7 +206,8 @@ final class LoupeAppTests: XCTestCase {
             #"{"v":1,"ts":1000,"runId":"r","event":"session_start","payload":{"adapter":"a","adapterVersion":"1","runtime":"mlx","pid":9}}"#,
             #"{"v":1,"ts":1010,"runId":"r","requestId":"\t=2+2","event":"request_start","payload":{"promptTokens":1}}"#,
             #"{"v":1,"ts":1020,"runId":"r","requestId":"\t=2+2","event":"prefill_end","payload":{"promptTokens":1}}"#,
-            #"{"v":1,"ts":1030,"runId":"r","requestId":"\t=2+2","event":"request_end","payload":{"outputTokens":1,"finishReason":"stop"}}"#,
+            #"{"v":1,"ts":1030,"runId":"r","requestId":"\t=2+2","event":"decode_tick","payload":{"outputTokens":1,"kvCacheBytes":1,"activeMemoryBytes":1}}"#,
+            #"{"v":1,"ts":1040,"runId":"r","requestId":"\t=2+2","event":"request_end","payload":{"outputTokens":1,"finishReason":"stop"}}"#,
         ]
         try events.joined(separator: "\n")
             .write(toFile: base + ".ndjson", atomically: true, encoding: .utf8)
@@ -218,5 +219,32 @@ final class LoupeAppTests: XCTestCase {
         await model.load()
         XCTAssertTrue(model.isLoaded)
         XCTAssertTrue(try model.evidenceCSV().contains("request,,,'\t=2+2"))
+    }
+
+    func testEvidenceCSVQuotesCarriageReturnAndNormalizesC0Controls() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("loupe-evidence-cr-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let base = directory.appendingPathComponent("formula").path
+        let events = [
+            #"{"v":1,"ts":1000,"runId":"r","event":"session_start","payload":{"adapter":"a","adapterVersion":"1","runtime":"mlx","pid":9}}"#,
+            #"{"v":1,"ts":1010,"runId":"r","requestId":"\r=2+2\u0001","event":"request_start","payload":{"promptTokens":1}}"#,
+            #"{"v":1,"ts":1020,"runId":"r","requestId":"\r=2+2\u0001","event":"prefill_end","payload":{"promptTokens":1}}"#,
+            #"{"v":1,"ts":1030,"runId":"r","requestId":"\r=2+2\u0001","event":"decode_tick","payload":{"outputTokens":1,"kvCacheBytes":1,"activeMemoryBytes":1}}"#,
+            #"{"v":1,"ts":1040,"runId":"r","requestId":"\r=2+2\u0001","event":"request_end","payload":{"outputTokens":1,"finishReason":"stop"}}"#,
+        ]
+        try events.joined(separator: "\n")
+            .write(toFile: base + ".ndjson", atomically: true, encoding: .utf8)
+        try
+            #"{"system":{"ts":1000,"thermalState":"nominal","memoryUsedBytes":100,"memoryFreeBytes":50,"swapUsedBytes":0},"process":null}"#
+            .write(toFile: base + ".system.ndjson", atomically: true, encoding: .utf8)
+
+        let model = ReplayViewModel(basePath: base)
+        await model.load()
+        XCTAssertTrue(model.isLoaded)
+        let csv = try model.evidenceCSV()
+        XCTAssertTrue(csv.contains("request,,,\"'\r=2+2\u{FFFD}\""))
+        XCTAssertFalse(csv.contains("\u{0001}"))
     }
 }

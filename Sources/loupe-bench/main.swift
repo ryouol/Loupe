@@ -141,18 +141,18 @@ func runOnce(contextTokens: Int, seed: UInt64, runIndex: Int) throws -> [EventEn
     defer { try? FileManager.default.removeItem(atPath: eventsPath) }
 
     let process = Process()
+    let promptInput = Pipe()
+    let invocation = try BenchmarkAdapterInvocation(
+        model: spec.model, outputPath: eventsPath, contextTokens: contextTokens,
+        maxTokens: spec.outputTokens, seed: seed,
+        runID: "r-bench-c\(contextTokens)-\(runIndex)",
+        prompt: spec.promptCorpus.joined(separator: " "))
     process.executableURL = URL(fileURLWithPath: pythonPath)
-    process.arguments = [
-        "-m", "loupe_mlx.bench",
-        "--model", spec.model,
-        "--out", eventsPath,
-        "--context-tokens", String(contextTokens),
-        "--max-tokens", String(spec.outputTokens),
-        "--seed", String(seed),
-        "--run-id", "r-bench-c\(contextTokens)-\(runIndex)",
-        "--prompt-base", spec.promptCorpus.joined(separator: " "),
-    ]
+    process.arguments = invocation.arguments
+    process.standardInput = promptInput
     try process.run()
+    promptInput.fileHandleForWriting.write(invocation.standardInput)
+    try promptInput.fileHandleForWriting.close()
     process.waitUntilExit()
     guard process.terminationStatus == 0 else {
         throw NSError(

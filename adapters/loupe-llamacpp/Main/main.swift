@@ -3,7 +3,7 @@ import Foundation
 import LoupeCore
 import LoupeLlamaCpp
 
-// Drives llama-server completions and streams protocol-v2 events to the
+// Drives llama-server completions and streams current-protocol events to the
 // Loupe app. The server is observed from outside: per-request truth from
 // /completion timings, gauges from /metrics at 10 Hz, PID resolved from the
 // listening socket so the app can attach per-process telemetry.
@@ -25,11 +25,18 @@ var socketPath =
     .appendingPathComponent(LoupeUserRuntime.directoryName)
     .appendingPathComponent(LoupeUserRuntime.adapterSocketName).path
 var prompt = "Explain the difference between prefill and decode in one sentence."
+var promptFromStdin = false
 var maxTokens = 64
-var kvLayers = 24
-var kvHeadDimension = 64
-var kvHeads = 2
+var kvLayers: Int?
+var kvHeadDimension: Int?
+var kvHeads: Int?
+var kvBytesPerElement: Int?
 
+do {
+    try PromptInput.validateCommandLine(Array(CommandLine.arguments.dropFirst()))
+} catch {
+    fail("inline --prompt text is unsupported; pipe bounded UTF-8 to --prompt-stdin")
+}
 var arguments = CommandLine.arguments.dropFirst().makeIterator()
 while let argument = arguments.next() {
     switch argument {
@@ -41,9 +48,9 @@ while let argument = arguments.next() {
     case "--socket":
         guard let value = arguments.next() else { fail("--socket requires a path") }
         socketPath = value
-    case "--prompt":
-        guard let value = arguments.next() else { fail("--prompt requires text") }
-        prompt = value
+    case "--prompt-stdin":
+        guard !promptFromStdin else { fail("--prompt-stdin may be supplied once") }
+        promptFromStdin = true
     case "--max-tokens":
         guard let value = arguments.next().flatMap(Int.init) else {
             fail("--max-tokens requires an integer")
@@ -64,13 +71,26 @@ while let argument = arguments.next() {
             fail("--kv-heads requires an integer")
         }
         kvHeads = value
+    case "--kv-bytes-per-element":
+        guard let value = arguments.next().flatMap(Int.init) else {
+            fail("--kv-bytes-per-element requires an integer")
+        }
+        kvBytesPerElement = value
     default:
         fail(
-            "usage: loupe-llamacpp [--server url] [--socket path] [--prompt text] "
-                + "[--max-tokens n] [--kv-layers n] [--kv-head-dim n] [--kv-heads n]")
+            "usage: loupe-llamacpp [--server url] [--socket path] [--prompt-stdin] "
+                + "[--max-tokens n] --kv-layers n --kv-head-dim n --kv-heads n "
+                + "--kv-bytes-per-element n")
     }
 }
 guard let serverURL else { fail("invalid --server URL") }
+if promptFromStdin {
+    do {
+        prompt = try PromptInput.read()
+    } catch {
+        fail("--prompt-stdin requires 1 to 65536 bytes of valid UTF-8")
+    }
+}
 guard let scheme = serverURL.scheme?.lowercased(), ["http", "https"].contains(scheme),
     serverURL.user == nil, serverURL.password == nil,
     let host = serverURL.host?.lowercased(),
@@ -80,15 +100,22 @@ else {
         "--server must use the numeric loopback address 127.0.0.1 or ::1 without credentials"
     )
 }
-guard (1...4_096).contains(maxTokens), prompt.utf8.count <= 65_536,
+guard let kvLayers, let kvHeadDimension, let kvHeads, let kvBytesPerElement else {
+    fail(
+        "--kv-layers, --kv-head-dim, --kv-heads, and --kv-bytes-per-element "
+            + "are required model geometry")
+}
+guard (1...4_096).contains(maxTokens), prompt.utf8.count <= PromptInput.maxBytes,
     (1...512).contains(kvLayers), (1...1_024).contains(kvHeadDimension),
-    (1...256).contains(kvHeads)
+    (1...256).contains(kvHeads), (1...16).contains(kvBytesPerElement)
 else { fail("token, prompt, or KV dimensions exceed safe adapter limits") }
 guard !socketPath.isEmpty,
     socketPath.utf8.count < MemoryLayout.size(ofValue: sockaddr_un().sun_path)
 else { fail("adapter socket path is empty or too long") }
 
-let kvModel = KVCacheModel(layers: kvLayers, headDimension: kvHeadDimension, kvHeads: kvHeads)
+let kvModel = KVCacheModel(
+    layers: kvLayers, headDimension: kvHeadDimension, kvHeads: kvHeads,
+    bytesPerElement: kvBytesPerElement)
 let runId =
     ProcessInfo.processInfo.environment[LoupeEnvironment.runIDVariable]
     ?? "r-\(UUID().uuidString.prefix(8).lowercased())"
@@ -130,7 +157,7 @@ do {
     guard let port = UInt16(exactly: serverURL.port ?? defaultPort), port > 0 else {
         throw AdapterFailure.invalidServerPort
     }
-    guard let serverPID = ListeningPortResolver.pid(listeningOn: port) else {
+    guard let serverPID = ListeningPortResolver.pid(listeningAt: host, port: port) else {
         throw AdapterFailure.serverProcessNotFound(port)
     }
 

@@ -1,6 +1,41 @@
 import Darwin
 import Foundation
 
+public enum PromptInputError: Error, Equatable {
+    case empty
+    case tooLarge
+    case invalidUTF8
+    case inlinePromptUnsupported
+}
+
+/// Prompt transport for the standalone adapter. Prompt bytes arrive through
+/// a bounded pipe/file descriptor and never become visible in process argv.
+public enum PromptInput {
+    public static let maxBytes = 65_536
+
+    public static func validateCommandLine(_ arguments: [String]) throws {
+        if arguments.contains(where: { $0 == "--prompt" || $0.hasPrefix("--prompt=") }) {
+            throw PromptInputError.inlinePromptUnsupported
+        }
+    }
+
+    public static func read(from handle: FileHandle = .standardInput) throws -> String {
+        var data = Data()
+        while data.count <= maxBytes {
+            let remaining = maxBytes + 1 - data.count
+            guard let chunk = try handle.read(upToCount: min(65_536, remaining)), !chunk.isEmpty
+            else { break }
+            data.append(chunk)
+        }
+        guard !data.isEmpty else { throw PromptInputError.empty }
+        guard data.count <= maxBytes else { throw PromptInputError.tooLarge }
+        guard let prompt = String(data: data, encoding: .utf8) else {
+            throw PromptInputError.invalidUTF8
+        }
+        return prompt
+    }
+}
+
 /// Client half of the adapter → user app socket: best-effort line writer.
 /// Writes are synchronous, which is fine here and only here: this executable
 /// emits a request's whole trace after the stream completes, so a slow write

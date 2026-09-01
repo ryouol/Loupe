@@ -32,6 +32,9 @@ final class ResultsViewTests: XCTestCase {
         XCTAssertEqual(model.runRows.count, 4)
         XCTAssertEqual(model.reportName, "benchmark-baseline.report")
         XCTAssertFalse(model.report?.validationFailures.isEmpty ?? true)
+        XCTAssertEqual(model.latencySemantics, .legacyPrefillEnd)
+        XCTAssertEqual(model.latencyColumnTitle, "Prefill end")
+        XCTAssertFalse(model.latencyChartTitle.contains("First Token"))
     }
 
     func testViewModelSurfacesUnreadableReport() {

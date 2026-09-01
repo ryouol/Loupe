@@ -43,6 +43,9 @@ final class SessionMetricsTests: XCTestCase {
             envelope(.requestStart(.init(promptTokens: nil)), ts: 1_000_000_000, requestId: "q-1"),
             envelope(.prefillEnd(.init(promptTokens: 128)), ts: 1_250_000_000, requestId: "q-1"),
             envelope(
+                .decodeTick(.init(outputTokens: 0, kvCacheBytes: 0, activeMemoryBytes: 1)),
+                ts: 1_255_000_000, requestId: "q-1"),
+            envelope(
                 .decodeTick(.init(outputTokens: 1, kvCacheBytes: 1, activeMemoryBytes: 1)),
                 ts: 1_260_000_000, requestId: "q-1"),
             envelope(
@@ -51,8 +54,8 @@ final class SessionMetricsTests: XCTestCase {
         ]
         let metrics = SessionMetrics.perRequest(events: events)
         XCTAssertEqual(metrics.count, 1)
-        XCTAssertEqual(metrics[0].ttftNs, 250_000_000)
-        XCTAssertEqual(metrics[0].ttftMs, 250, accuracy: 0.0001)
+        XCTAssertEqual(metrics[0].ttftNs, 260_000_000)
+        XCTAssertEqual(metrics[0].ttftMs, 260, accuracy: 0.0001)
         XCTAssertEqual(metrics[0].promptTokens, 128)
         // 50 tokens over exactly 1 second of decode.
         XCTAssertEqual(metrics[0].decodeTokensPerSecond, 50, accuracy: 0.0001)
@@ -64,6 +67,9 @@ final class SessionMetricsTests: XCTestCase {
             // No prefill_end, no request_end (crashed mid-prefill).
             envelope(.requestStart(.init(promptTokens: nil)), ts: 20, requestId: "q-ok"),
             envelope(.prefillEnd(.init(promptTokens: 8)), ts: 30, requestId: "q-ok"),
+            envelope(
+                .decodeTick(.init(outputTokens: 1, kvCacheBytes: 1, activeMemoryBytes: 1)),
+                ts: 35, requestId: "q-ok"),
             envelope(
                 .requestEnd(.init(outputTokens: 4, finishReason: "stop")), ts: 40,
                 requestId: "q-ok"),
@@ -89,9 +95,10 @@ final class SessionMetricsTests: XCTestCase {
         let metric = SessionMetrics.perRequest(events: events).first
         XCTAssertEqual(metric?.decodeDurationNs, 40_000_000)
         XCTAssertEqual(metric?.decodeTokensPerSecond ?? -1, 25, accuracy: 0.0001)
+        XCTAssertEqual(metric?.ttftNs, 899)
     }
 
-    func testProtocolV2DoesNotInventRateWithoutMeasuredDecodeWindow() {
+    func testCurrentProtocolDoesNotInventRateWithoutMeasuredDecodeWindow() {
         let events: [EventEnvelope] = [
             EventEnvelope(
                 version: EventProtocol.version, sequence: 1, ts: 1, runId: "r-m",
@@ -101,6 +108,14 @@ final class SessionMetricsTests: XCTestCase {
                 requestId: "q-1", payload: .prefillEnd(.init(promptTokens: 8))),
             EventEnvelope(
                 version: EventProtocol.version, sequence: 3, ts: 1_000, runId: "r-m",
+                requestId: "q-1",
+                payload: .decodeTick(
+                    .init(
+                        outputTokens: 1, kvCacheBytes: nil, activeMemoryBytes: 1,
+                        allocatorMemoryGrowthBytes: 1,
+                        memoryProvenance: .allocatorDeltaProxy))),
+            EventEnvelope(
+                version: EventProtocol.version, sequence: 4, ts: 2_000, runId: "r-m",
                 requestId: "q-1",
                 payload: .requestEnd(.init(outputTokens: 1, finishReason: "eos"))),
         ]
@@ -117,6 +132,10 @@ final class SessionMetricsTests: XCTestCase {
                 envelope(.prefillEnd(.init(promptTokens: 1)), ts: base + 10, requestId: id))
             events.append(
                 envelope(
+                    .decodeTick(.init(outputTokens: 1, kvCacheBytes: 1, activeMemoryBytes: 1)),
+                    ts: base + 11, requestId: id))
+            events.append(
+                envelope(
                     .requestEnd(.init(outputTokens: 1, finishReason: "stop")), ts: base + 20,
                     requestId: id))
         }
@@ -126,6 +145,18 @@ final class SessionMetricsTests: XCTestCase {
 }
 
 final class CooldownGateTests: XCTestCase {
+    func testSingleNominalObservationCompletesAfterStableDwell() async {
+        let (stream, continuation) = AsyncStream<ThermalState>.makeStream()
+        continuation.yield(.nominal)
+        let clock = ContinuousClock()
+        let start = clock.now
+        let outcome = await CooldownGate.waitForNominal(
+            states: stream, timeout: .seconds(2), stableFor: .milliseconds(20))
+        continuation.finish()
+        XCTAssertEqual(outcome, .nominal)
+        XCTAssertGreaterThanOrEqual(clock.now - start, .milliseconds(20))
+    }
+
     func testNominalMustRemainStableForTheDwell() async {
         let stream = AsyncStream<ThermalState> { continuation in
             continuation.yield(.nominal)
@@ -191,6 +222,21 @@ final class CooldownGateTests: XCTestCase {
 }
 
 final class BenchmarkSpecTests: XCTestCase {
+    func testAdapterInvocationKeepsMaximumPromptOffArgv() throws {
+        let secret = String(repeating: "s", count: BenchmarkAdapterInvocation.maxPromptBytes)
+        let invocation = try BenchmarkAdapterInvocation(
+            model: "m", outputPath: "/tmp/events", contextTokens: 1,
+            maxTokens: 1, seed: 1, runID: "r", prompt: secret)
+        XCTAssertEqual(invocation.standardInput, Data(secret.utf8))
+        XCTAssertTrue(invocation.arguments.contains("--prompt-stdin"))
+        XCTAssertFalse(invocation.arguments.contains(secret))
+        XCTAssertFalse(invocation.arguments.contains("--prompt-base"))
+        XCTAssertThrowsError(
+            try BenchmarkAdapterInvocation(
+                model: "m", outputPath: "/tmp/events", contextTokens: 1,
+                maxTokens: 1, seed: 1, runID: "r", prompt: secret + "x"))
+    }
+
     func testYAMLRoundTrip() throws {
         let yaml = """
             model: mlx-community/Qwen2.5-0.5B-Instruct-4bit
@@ -268,6 +314,10 @@ final class BenchmarkGoldenFileTests: XCTestCase {
             return [
                 make(.requestStart(.init(promptTokens: nil)), 0),
                 make(.prefillEnd(.init(promptTokens: UInt32(context))), UInt64(context) * 1_000),
+                make(
+                    .decodeTick(
+                        .init(outputTokens: 1, kvCacheBytes: 1, activeMemoryBytes: 1)),
+                    UInt64(context) * 1_000 + 50_000),
                 make(
                     .requestEnd(.init(outputTokens: 32, finishReason: "stop")),
                     UInt64(context) * 1_000 + UInt64(500_000_000 + index * 10_000_000)),

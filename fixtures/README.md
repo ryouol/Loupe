@@ -5,8 +5,10 @@ a failing test.
 
 ## Bundled demo
 
-`Resources/Samples/demo-session` is the shipping zero-cost demo: 16 current
-protocol-v1 events from adapter version 0.2.0 and 20 sanitized telemetry rows.
+`Resources/Samples/demo-session` is the shipping zero-cost demo: 16 historical
+protocol-v1 events and 20 sanitized telemetry rows. Its embedded adapter
+version string is fixture metadata from before protocol negotiation; it does
+not mean the current 0.2.0 adapter emits v1.
 It includes clock sync, two complete requests, GPU/power data, swap growth, and
 a thermal-state change. It contains no prompt or generated text and uses a
 synthetic PID. Swift/Python checks require every event to decode with zero

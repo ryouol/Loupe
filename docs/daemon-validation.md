@@ -26,7 +26,7 @@ same-team/active-console policy.
    `Contents/Library/LaunchDaemons/ai.squint.loupe.daemon.plist`; its filename,
    `Label`, Mach service, and source constants agree.
 3. From **Telemetry**, click **Install**, approve under System Settings → Login
-   Items, and refresh. The handshake must show version 0.2.0 and protocol v2;
+   Items, and refresh. The handshake must show version 0.2.0 and protocol v3;
    samples must advance.
 4. Run a recording. GPU/power fields should appear when IOReport resolves;
    absent channels must remain absent, never zero-filled.

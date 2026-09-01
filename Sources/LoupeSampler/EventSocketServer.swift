@@ -369,7 +369,9 @@ public actor EventSocketServer {
     }
 
     private func recordSequence(_ envelope: EventEnvelope) {
-        guard envelope.v == EventProtocol.version, let sequence = envelope.sequence else {
+        guard EventProtocol.versionsWithSequencing.contains(envelope.v),
+            let sequence = envelope.sequence
+        else {
             sawLegacyProtocol = true
             return
         }
