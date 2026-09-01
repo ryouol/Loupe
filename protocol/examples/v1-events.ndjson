@@ -10,5 +10,5 @@
 {"v":1,"ts":9900000000,"runId":"r-8f4e2a","requestId":"q-2","event":"request_start","payload":{}}
 {"v":1,"ts":10200000000,"runId":"r-8f4e2a","requestId":"q-2","event":"error","payload":{"code":"generation_failed","message":"metal command buffer aborted"}}
 {"v":1,"ts":10300000000,"runId":"r-8f4e2a","event":"error","payload":{"code":"socket_backpressure","message":""}}
-{"v":1,"ts":10400000000,"runId":"r-8f4e2a","event":"model_load_end","payload":{"modelId":"mlx-community/does-not-exist","ok":false}}
-{"v":1,"ts":18446744073709551615,"runId":"r-8f4e2a","requestId":"q-3","event":"decode_tick","payload":{"outputTokens":4294967295,"kvCacheBytes":18446744073709551615,"activeMemoryBytes":0}}
+{"v":1,"ts":10400000000,"runId":"r-8f4e2a","requestId":"q-2","event":"prefill_end","payload":{"promptTokens":0}}
+{"v":1,"ts":18446744073709551615,"runId":"r-8f4e2a","requestId":"q-2","event":"decode_tick","payload":{"outputTokens":4294967295,"kvCacheBytes":18446744073709551615,"activeMemoryBytes":0}}

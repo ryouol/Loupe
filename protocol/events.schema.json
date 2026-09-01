@@ -1,16 +1,17 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/ryouol/Loupe/main/protocol/events.schema.json",
-  "title": "Loupe inference event envelope (v1)",
-  "description": "One event per NDJSON line. ts is mach_continuous_time nanoseconds on the emitter's clock; the clock_sync handshake maps emitter timestamps onto the daemon's clock. Changing anything here means bumping v, updating fixtures, and updating every adapter in the same commit.",
+  "title": "Loupe inference event envelope (v3)",
+  "description": "One event per NDJSON line. ts is mach_continuous_time nanoseconds on the emitter's clock; the clock_sync handshake maps emitter timestamps onto the app's clock. Changing anything here means bumping v, updating fixtures, and updating every adapter in the same commit.",
   "$comment": "x-limits is normative for decoders: both language implementations assert their constants against it.",
   "x-limits": { "maxLineBytes": 65536 },
   "type": "object",
-  "required": ["v", "ts", "runId", "event", "payload"],
+  "required": ["v", "seq", "ts", "runId", "event", "payload"],
   "additionalProperties": false,
   "properties": {
-    "v": { "const": 1 },
-    "ts": { "type": "integer", "minimum": 0 },
+    "v": { "const": 3 },
+    "seq": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 },
+    "ts": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
     "runId": { "type": "string", "minLength": 1, "maxLength": 128 },
     "requestId": { "type": ["string", "null"], "minLength": 1, "maxLength": 128 },
     "event": {
@@ -23,6 +24,7 @@
         "prefill_end",
         "decode_tick",
         "request_end",
+        "transport_summary",
         "error"
       ]
     },
@@ -62,6 +64,10 @@
       "then": { "properties": { "payload": { "$ref": "#/$defs/requestEnd" } } }
     },
     {
+      "if": { "properties": { "event": { "const": "transport_summary" } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/transportSummary" } } }
+    },
+    {
       "if": { "properties": { "event": { "const": "error" } } },
       "then": { "properties": { "payload": { "$ref": "#/$defs/errorPayload" } } }
     },
@@ -88,7 +94,7 @@
         "adapter": { "type": "string", "minLength": 1, "maxLength": 256 },
         "adapterVersion": { "type": "string", "minLength": 1, "maxLength": 128 },
         "runtime": { "type": "string", "minLength": 1, "maxLength": 128 },
-        "pid": { "type": "integer", "minimum": 1 }
+        "pid": { "type": "integer", "minimum": 1, "maximum": 2147483647 }
       }
     },
     "clockSync": {
@@ -96,10 +102,10 @@
       "additionalProperties": false,
       "required": ["t0", "t1", "t2", "t3"],
       "properties": {
-        "t0": { "type": "integer", "minimum": 0 },
-        "t1": { "type": "integer", "minimum": 0 },
-        "t2": { "type": "integer", "minimum": 0 },
-        "t3": { "type": "integer", "minimum": 0 }
+        "t0": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+        "t1": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+        "t2": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+        "t3": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 }
       }
     },
     "modelLoadStart": {
@@ -117,14 +123,14 @@
       "properties": {
         "modelId": { "type": "string", "minLength": 1, "maxLength": 1024 },
         "ok": { "type": "boolean" },
-        "weightsBytes": { "type": "integer", "minimum": 0 }
+        "weightsBytes": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 }
       }
     },
     "requestStart": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "promptTokens": { "type": "integer", "minimum": 0 }
+        "promptTokens": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
       }
     },
     "prefillEnd": {
@@ -132,26 +138,69 @@
       "additionalProperties": false,
       "required": ["promptTokens"],
       "properties": {
-        "promptTokens": { "type": "integer", "minimum": 0 }
+        "promptTokens": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
       }
     },
     "decodeTick": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["outputTokens", "kvCacheBytes", "activeMemoryBytes"],
+      "required": ["outputTokens", "activeMemoryBytes", "memoryProvenance"],
       "properties": {
-        "outputTokens": { "type": "integer", "minimum": 0 },
-        "kvCacheBytes": { "type": "integer", "minimum": 0 },
-        "activeMemoryBytes": { "type": "integer", "minimum": 0 }
-      }
+        "outputTokens": {
+          "description": "Cumulative output tokens. The timestamp of the first tick greater than zero is the observable first-output boundary used for TTFT.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "kvCacheBytes": {
+          "description": "True KV bytes, either runtime-measured or architecture-modeled according to memoryProvenance.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "allocatorMemoryGrowthBytes": {
+          "description": "Whole-allocator growth since request start. This proxy is not a KV measurement.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "activeMemoryBytes": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+        "memoryProvenance": {
+          "enum": ["runtime_measured_kv", "architecture_modeled_kv", "allocator_delta_proxy"]
+        }
+      },
+      "oneOf": [
+        {
+          "required": ["kvCacheBytes"],
+          "properties": {
+            "memoryProvenance": { "enum": ["runtime_measured_kv", "architecture_modeled_kv"] }
+          },
+          "not": { "required": ["allocatorMemoryGrowthBytes"] }
+        },
+        {
+          "required": ["allocatorMemoryGrowthBytes"],
+          "properties": { "memoryProvenance": { "const": "allocator_delta_proxy" } },
+          "not": { "required": ["kvCacheBytes"] }
+        }
+      ]
     },
     "requestEnd": {
       "type": "object",
       "additionalProperties": false,
       "required": ["outputTokens", "finishReason"],
       "properties": {
-        "outputTokens": { "type": "integer", "minimum": 0 },
-        "finishReason": { "type": "string", "minLength": 1, "maxLength": 64 }
+        "outputTokens": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "finishReason": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "decodeDurationNs": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 }
+      }
+    },
+    "transportSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attemptedEvents", "producerDroppedEvents"],
+      "properties": {
+        "attemptedEvents": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+        "producerDroppedEvents": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 }
       }
     },
     "errorPayload": {

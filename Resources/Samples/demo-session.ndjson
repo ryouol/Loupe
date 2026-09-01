@@ -1,0 +1,16 @@
+{"event":"session_start","payload":{"adapter":"loupe-mlx","adapterVersion":"0.2.0","pid":4242,"runtime":"mlx"},"runId":"sample-local-2026","ts":1000000000,"v":1}
+{"event":"clock_sync","payload":{"t0":1000100000,"t1":1000100000,"t2":1000100000,"t3":1000100000},"runId":"sample-local-2026","ts":1000100000,"v":1}
+{"event":"model_load_start","payload":{"modelId":"mlx-community/Qwen2.5-0.5B-Instruct-4bit"},"runId":"sample-local-2026","ts":1100000000,"v":1}
+{"event":"model_load_end","payload":{"modelId":"mlx-community/Qwen2.5-0.5B-Instruct-4bit","ok":true,"weightsBytes":394264576},"runId":"sample-local-2026","ts":2600000000,"v":1}
+{"event":"request_start","payload":{"promptTokens":96},"requestId":"q-1","runId":"sample-local-2026","ts":3000000000,"v":1}
+{"event":"prefill_end","payload":{"promptTokens":96},"requestId":"q-1","runId":"sample-local-2026","ts":3380000000,"v":1}
+{"event":"decode_tick","payload":{"activeMemoryBytes":438304768,"kvCacheBytes":8388608,"outputTokens":1},"requestId":"q-1","runId":"sample-local-2026","ts":3450000000,"v":1}
+{"event":"decode_tick","payload":{"activeMemoryBytes":446693376,"kvCacheBytes":16777216,"outputTokens":16},"requestId":"q-1","runId":"sample-local-2026","ts":4200000000,"v":1}
+{"event":"decode_tick","payload":{"activeMemoryBytes":455081984,"kvCacheBytes":25165824,"outputTokens":32},"requestId":"q-1","runId":"sample-local-2026","ts":5000000000,"v":1}
+{"event":"request_end","payload":{"finishReason":"stop","outputTokens":48},"requestId":"q-1","runId":"sample-local-2026","ts":5800000000,"v":1}
+{"event":"request_start","payload":{"promptTokens":256},"requestId":"q-2","runId":"sample-local-2026","ts":6400000000,"v":1}
+{"event":"prefill_end","payload":{"promptTokens":256},"requestId":"q-2","runId":"sample-local-2026","ts":7150000000,"v":1}
+{"event":"decode_tick","payload":{"activeMemoryBytes":488636416,"kvCacheBytes":50331648,"outputTokens":1},"requestId":"q-2","runId":"sample-local-2026","ts":7250000000,"v":1}
+{"event":"decode_tick","payload":{"activeMemoryBytes":505413632,"kvCacheBytes":67108864,"outputTokens":24},"requestId":"q-2","runId":"sample-local-2026","ts":8400000000,"v":1}
+{"event":"decode_tick","payload":{"activeMemoryBytes":522190848,"kvCacheBytes":83886080,"outputTokens":48},"requestId":"q-2","runId":"sample-local-2026","ts":9600000000,"v":1}
+{"event":"request_end","payload":{"finishReason":"length","outputTokens":64},"requestId":"q-2","runId":"sample-local-2026","ts":10400000000,"v":1}

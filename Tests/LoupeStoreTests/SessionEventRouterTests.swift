@@ -93,4 +93,52 @@ final class SessionEventRouterTests: XCTestCase {
         XCTAssertEqual(eventsB.count, 1)
         XCTAssertNotEqual(storeA.databaseURL, storeB.databaseURL)
     }
+
+    func testConcurrentThresholdFlushesPersistEveryEventOnce() async throws {
+        let router = SessionEventRouter(
+            directory: directory, host: .stub, flushThreshold: 1,
+            maxPendingPerSession: 256)
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for timestamp in 1...100 {
+                group.addTask {
+                    try await router.route(
+                        EventEnvelope(
+                            ts: UInt64(timestamp), runId: "r-concurrent", requestId: nil,
+                            payload: .modelLoadStart(.init(modelId: "m-\(timestamp)"))))
+                }
+            }
+            try await group.waitForAll()
+        }
+        try await router.flushAll()
+
+        let maybeStore = await router.persistedStore(runId: "r-concurrent")
+        let store = try XCTUnwrap(maybeStore)
+        let persisted = try await store.events()
+        XCTAssertEqual(persisted.count, 100)
+        XCTAssertEqual(Set(persisted.map(\.ts)), Set((1...100).map(UInt64.init)))
+    }
+
+    func testExpectedRunAndSessionCountAreBounded() async throws {
+        let pinned = SessionEventRouter(
+            directory: directory, host: .stub, acceptedRunID: "expected")
+        do {
+            try await pinned.route(
+                envelope(runId: "surprise", ts: 1, payload: .modelLoadStart(.init(modelId: "m"))))
+            XCTFail("unexpected run id must be denied")
+        } catch {
+            XCTAssertEqual(error as? SessionRouterError, .unexpectedRunID("surprise"))
+        }
+
+        let bounded = SessionEventRouter(
+            directory: directory, host: .stub, maxSessions: 1)
+        try await bounded.route(
+            envelope(runId: "first", ts: 1, payload: .modelLoadStart(.init(modelId: "m"))))
+        do {
+            try await bounded.route(
+                envelope(runId: "second", ts: 2, payload: .modelLoadStart(.init(modelId: "m"))))
+            XCTFail("session cap must be enforced")
+        } catch {
+            XCTAssertEqual(error as? SessionRouterError, .sessionLimitReached)
+        }
+    }
 }

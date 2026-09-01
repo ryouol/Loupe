@@ -1,6 +1,6 @@
 {not json at all
 [1,2,3]
-{"v":2,"ts":1,"runId":"r-x","requestId":"q-1","event":"decode_tick","payload":{"outputTokens":1,"kvCacheBytes":1,"activeMemoryBytes":1}}
+{"v":4,"ts":1,"runId":"r-x","requestId":"q-1","event":"decode_tick","payload":{"outputTokens":1,"kvCacheBytes":1,"activeMemoryBytes":1}}
 {"v":1,"ts":1,"runId":"r-x","event":"warp_speed","payload":{}}
 {"v":1,"ts":1,"runId":"r-x","requestId":"q-1","event":"decode_tick","payload":{"outputTokens":1,"activeMemoryBytes":1}}
 {"v":1,"ts":1,"runId":"r-x","requestId":"q-1","event":"decode_tick","payload":{"outputTokens":-5,"kvCacheBytes":1,"activeMemoryBytes":1}}

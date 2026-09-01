@@ -13,7 +13,7 @@ def repo_root() -> Path:
 
 @pytest.fixture(scope="session")
 def valid_lines() -> list[bytes]:
-    return (REPO_ROOT / "protocol/examples/v1-events.ndjson").read_bytes().splitlines()
+    return (REPO_ROOT / "protocol/examples/v3-events.ndjson").read_bytes().splitlines()
 
 
 @pytest.fixture(scope="session")

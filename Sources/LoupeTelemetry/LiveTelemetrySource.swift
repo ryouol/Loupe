@@ -2,6 +2,29 @@ import Darwin
 import Foundation
 import LoupeCore
 
+private final class LiveTelemetryCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var dropped = 0
+    private var complete = false
+
+    func record<T>(_ result: AsyncStream<T>.Continuation.YieldResult) {
+        if case .dropped = result {
+            lock.withLock { if dropped < Int.max { dropped += 1 } }
+        }
+    }
+
+    func markComplete() {
+        lock.withLock { complete = true }
+    }
+
+    func snapshot() -> TelemetryAcquisitionStats {
+        lock.withLock {
+            TelemetryAcquisitionStats(
+                droppedSamples: dropped, complete: complete, sourceWasActive: true)
+        }
+    }
+}
+
 /// CPU% is a delta between cumulative rusage reads over wall time; the
 /// tracker owns the previous reading.
 public struct CPUDeltaTracker: Sendable {
@@ -38,6 +61,8 @@ public actor LiveTelemetrySource: TelemetrySource {
     private let cadence: Duration
     private let timebase: Timebase
     private let makePowerReader: @Sendable () -> (any PowerChannelReading)?
+    private let bufferLimit: Int
+    private let counter = LiveTelemetryCounter()
 
     /// The power reader is a factory because the reader itself is stateful
     /// and non-Sendable — it is created and lives entirely inside the
@@ -46,11 +71,13 @@ public actor LiveTelemetrySource: TelemetrySource {
         targetPID: Int32?,
         cadence: Duration = Sampling.defaultCadence,
         timebase: Timebase = .live(),
+        bufferLimit: Int = 64,
         makePowerReader: @escaping @Sendable () -> (any PowerChannelReading)? = { nil }
     ) {
         self.targetPID = targetPID
         self.cadence = cadence
         self.timebase = timebase
+        self.bufferLimit = max(1, min(bufferLimit, 4_096))
         self.makePowerReader = makePowerReader
     }
 
@@ -59,21 +86,37 @@ public actor LiveTelemetrySource: TelemetrySource {
         let cadence = cadence
         let timebase = timebase
         let makePowerReader = makePowerReader
-        return AsyncStream { continuation in
+        let bufferLimit = bufferLimit
+        let counter = counter
+        // The producer must remain bounded if an XPC client or disk writer
+        // stalls. Telemetry is a latest-state signal, so keeping the newest
+        // 64 rows is preferable to accumulating an unbounded backlog.
+        return AsyncStream(bufferingPolicy: .bufferingNewest(bufferLimit)) { continuation in
             let task = Task {
                 var tracker = CPUDeltaTracker()
                 let powerReader = makePowerReader()
+                var sequence: UInt64 = 0
                 while !Task.isCancelled {
                     let power = powerReader?.sample() ?? PowerReading()
-                    continuation.yield(
-                        Self.takeSample(
-                            pid: pid, timebase: timebase, tracker: &tracker, power: power))
+                    if sequence < UInt64.max { sequence += 1 }
+                    let sample = Self.takeSample(
+                        pid: pid, timebase: timebase, tracker: &tracker, power: power
+                    ).withAcquisitionSequence(sequence)
+                    counter.record(continuation.yield(sample))
                     try? await Task.sleep(for: cadence)
                 }
+                counter.markComplete()
                 continuation.finish()
             }
-            continuation.onTermination = { _ in task.cancel() }
+            continuation.onTermination = { _ in
+                task.cancel()
+                counter.markComplete()
+            }
         }
+    }
+
+    public func acquisitionStats() -> TelemetryAcquisitionStats {
+        counter.snapshot()
     }
 
     static func takeSample(

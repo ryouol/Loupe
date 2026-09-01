@@ -19,7 +19,7 @@ public final class ComparisonViewModel {
 
     public func load(url: URL, asBaseline: Bool) {
         do {
-            let report = try BenchmarkAssembler.decode(Data(contentsOf: url))
+            let report = try BenchmarkAssembler.decode(contentsOf: url)
             let entry = (url.deletingPathExtension().lastPathComponent, report)
             if asBaseline { baseline = entry } else { candidate = entry }
             loadFailure = nil
@@ -53,6 +53,7 @@ public struct ComparisonView: View {
     @State private var importing: Slot?
     @State private var exportDocument: TextExportDocument?
     @State private var exportType: UTType = .commaSeparatedText
+    @State private var exportFailure: String?
 
     public init() {}
 
@@ -104,8 +105,21 @@ public struct ComparisonView: View {
             document: exportDocument,
             contentType: exportType,
             defaultFilename: "loupe-comparison"
-        ) { _ in
+        ) { result in
+            if case .failure(let error) = result {
+                exportFailure = error.localizedDescription
+            }
             exportDocument = nil
+        }
+        .alert(
+            "Comparison export failed",
+            isPresented: Binding(
+                get: { exportFailure != nil },
+                set: { if !$0 { exportFailure = nil } })
+        ) {
+            Button("OK", role: .cancel) { exportFailure = nil }
+        } message: {
+            Text(exportFailure ?? "Unknown export error")
         }
     }
 
@@ -139,7 +153,7 @@ public struct ComparisonView: View {
         GroupBox {
             VStack(alignment: .leading, spacing: 8) {
                 Label {
-                    Text("These runs are not comparable — no deltas will be shown.")
+                    Text("These runs are not comparable, so no deltas will be shown.")
                         .bold()
                 } icon: {
                     Image(systemName: "exclamationmark.octagon.fill")
@@ -193,7 +207,7 @@ public struct ComparisonView: View {
             }
             .frame(minHeight: 200)
         } label: {
-            Label("Side by Side — p50", systemImage: "square.split.2x1")
+            Label("Side by side: p50", systemImage: "square.split.2x1")
         }
     }
 

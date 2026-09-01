@@ -1,5 +1,4 @@
 import pytest
-
 from loupe_mlx.events import (
     MAX_LINE_BYTES,
     PAYLOAD_TYPES,
@@ -28,7 +27,7 @@ EXPECTED_MALFORMED_REASONS = [
 
 
 def test_example_file_shape(valid_lines, malformed_lines) -> None:
-    assert len(valid_lines) == 14, "example file changed without updating tests"
+    assert len(valid_lines) == 16, "example file changed without updating tests"
     assert len(malformed_lines) == len(EXPECTED_MALFORMED_REASONS)
 
 
@@ -45,8 +44,12 @@ def test_examples_cover_every_event(valid_lines) -> None:
 
 
 def test_extreme_unsigned_values_survive(valid_lines) -> None:
-    envelope = decode_line(valid_lines[-1])
-    assert envelope.ts == 2**64 - 1
+    envelope = next(
+        decode_line(line)
+        for line in valid_lines
+        if b'"outputTokens":4294967295' in line and b'"decode_tick"' in line
+    )
+    assert envelope.ts == 2**64 - 3
     assert envelope.payload.kv_cache_bytes == 2**64 - 1
     assert envelope.payload.output_tokens == 2**32 - 1
 
@@ -79,3 +82,73 @@ def test_encoder_omits_none_request_id() -> None:
     encoded = encode_line(envelope)
     assert b"requestId" not in encoded
     assert encoded.endswith(b"}")  # framing belongs to the NDJSON writer
+
+
+def test_instrument_rejects_unencodable_run_identifier() -> None:
+    from loupe_mlx import LoupeInstrument
+
+    class Sink:
+        dropped = 0
+        connected = True
+
+        def emit(self, _envelope) -> None:
+            raise AssertionError("invalid metadata must fail before the first event")
+
+        def close(self) -> None:
+            pass
+
+    with pytest.raises(ValueError, match="run_id"):
+        LoupeInstrument(run_id="r" * 129, writer=Sink())
+
+
+@pytest.mark.parametrize(
+    ("line", "reason"),
+    [
+        (
+            b'{"v":1,"ts":1,"runId":"","event":"model_load_start","payload":{"modelId":"m"}}',
+            DropReason.INVALID_ENVELOPE,
+        ),
+        (
+            b'{"v":1,"ts":1,"runId":"r","event":"session_start","payload":{"adapter":"a","adapterVersion":"1","runtime":"mlx","pid":0}}',
+            DropReason.INVALID_PAYLOAD,
+        ),
+        (
+            b'{"v":1,"ts":1,"runId":"r","event":"model_load_start","extra":true,"payload":{"modelId":"m"}}',
+            DropReason.INVALID_ENVELOPE,
+        ),
+        (
+            b'{"v":1,"ts":1,"runId":"r","event":"model_load_start","payload":{"modelId":"m","extra":true}}',
+            DropReason.INVALID_PAYLOAD,
+        ),
+        (
+            b'{"v":1,"ts":18446744073709551616,"runId":"r","event":"model_load_start","payload":{"modelId":"m"}}',
+            DropReason.INVALID_ENVELOPE,
+        ),
+        (
+            b'{"v":1,"ts":1,"runId":"r","requestId":"q","event":"decode_tick","payload":{"outputTokens":4294967296,"kvCacheBytes":0,"activeMemoryBytes":0}}',
+            DropReason.INVALID_PAYLOAD,
+        ),
+    ],
+)
+def test_decode_enforces_schema_constraints(line: bytes, reason: DropReason) -> None:
+    with pytest.raises(EventDropped) as failure:
+        decode_line(line)
+    assert failure.value.reason is reason
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        '{"outputTokens":1,"kvCacheBytes":2,"activeMemoryBytes":3}',
+        '{"outputTokens":1,"kvCacheBytes":2,"allocatorMemoryGrowthBytes":2,'
+        '"activeMemoryBytes":3,"memoryProvenance":"allocator_delta_proxy"}',
+    ],
+)
+def test_v3_decode_memory_requires_truthful_exclusive_provenance(payload: str) -> None:
+    line = (
+        '{"v":3,"seq":1,"ts":1,"runId":"r","requestId":"q",'
+        f'"event":"decode_tick","payload":{payload}}}'
+    )
+    with pytest.raises(EventDropped) as failure:
+        decode_line(line)
+    assert failure.value.reason is DropReason.INVALID_PAYLOAD

@@ -36,12 +36,41 @@ public struct RunComparison: Sendable, Equatable {
     ) -> RunComparison {
         var mismatches: [DimensionMismatch] = []
 
+        if !baseline.validationFailures.isEmpty || !candidate.validationFailures.isEmpty {
+            mismatches.append(
+                DimensionMismatch(
+                    name: "report.validity",
+                    baseline: baseline.validationFailures.isEmpty
+                        ? "valid" : baseline.validationFailures.joined(separator: ","),
+                    candidate: candidate.validationFailures.isEmpty
+                        ? "valid" : candidate.validationFailures.joined(separator: ",")))
+        }
+
+        if baseline.formatVersion != candidate.formatVersion {
+            mismatches.append(
+                DimensionMismatch(
+                    name: "formatVersion",
+                    baseline: String(baseline.formatVersion),
+                    candidate: String(candidate.formatVersion)))
+        }
+
         let baselineDimensions = baseline.spec.comparableDimensions
         let candidateDimensions = candidate.spec.comparableDimensions
         for (lhs, rhs) in zip(baselineDimensions, candidateDimensions) where lhs.value != rhs.value
         {
             mismatches.append(
                 DimensionMismatch(name: lhs.name, baseline: lhs.value, candidate: rhs.value))
+        }
+        if let baselineProvenance = baseline.provenance,
+            let candidateProvenance = candidate.provenance
+        {
+            for (lhs, rhs) in zip(
+                baselineProvenance.comparableDimensions,
+                candidateProvenance.comparableDimensions)
+            where lhs.value != rhs.value {
+                mismatches.append(
+                    DimensionMismatch(name: lhs.name, baseline: lhs.value, candidate: rhs.value))
+            }
         }
         // Hardware is a spec dimension in every sense that matters: numbers
         // from different chips or memory sizes are not comparable.
@@ -57,6 +86,22 @@ public struct RunComparison: Sendable, Equatable {
                     name: "host.memory",
                     baseline: "\(baseline.host.memoryBytes)",
                     candidate: "\(candidate.host.memoryBytes)"))
+        }
+        let hostDimensions: [(String, String, String)] = [
+            ("host.model", baseline.host.model, candidate.host.model),
+            (
+                "host.performanceCores", String(baseline.host.performanceCores),
+                String(candidate.host.performanceCores)
+            ),
+            (
+                "host.efficiencyCores", String(baseline.host.efficiencyCores),
+                String(candidate.host.efficiencyCores)
+            ),
+            ("host.osVersion", baseline.host.osVersion, candidate.host.osVersion),
+            ("host.osBuild", baseline.host.osBuild, candidate.host.osBuild),
+        ]
+        for (name, lhs, rhs) in hostDimensions where lhs != rhs {
+            mismatches.append(DimensionMismatch(name: name, baseline: lhs, candidate: rhs))
         }
 
         guard mismatches.isEmpty else {

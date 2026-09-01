@@ -37,6 +37,11 @@ final class TimebaseTests: XCTestCase {
         XCTAssertEqual(tb.nanoseconds(fromTicks: 2), 83)  // floor(250/3)
     }
 
+    func testUnrepresentableInjectedRatioSaturates() {
+        let timebase = Timebase(numer: UInt32.max, denom: 1)
+        XCTAssertEqual(timebase.nanoseconds(fromTicks: UInt64.max), UInt64.max)
+    }
+
     func testConversionIsExactFloorAgainst128BitReference() {
         var rng = SplitMix64(seed: 0xB0)
         let timebases = [
@@ -219,6 +224,17 @@ final class TimebaseTests: XCTestCase {
         XCTAssertNil(
             ClockOffsetEstimator.best(of: [ClockSyncSample(t0: .max, t1: 0, t2: .max, t3: 0)]))
         XCTAssertNil(ClockOffsetEstimator.best(of: []))
+    }
+
+    func testClockOffsetAverageCannotOverflow() {
+        let positive = UInt64(Int64.max)
+        XCTAssertEqual(
+            ClockSyncSample(t0: 0, t1: positive, t2: positive, t3: 0).estimate()?.offsetNs,
+            Int64.max)
+        let negative = UInt64(bitPattern: Int64.min)
+        XCTAssertEqual(
+            ClockSyncSample(t0: 0, t1: negative, t2: negative, t3: 0).estimate()?.offsetNs,
+            Int64.min)
     }
 
     // MARK: Helpers

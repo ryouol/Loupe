@@ -3,6 +3,7 @@ import XCTest
 
 @testable import LoupeCore
 @testable import LoupeSampler
+@testable import LoupeTelemetry
 
 /// The name-resolution and math rules, pure and hardware-free — this is
 /// where cross-generation channel-name drift is caught.
@@ -46,6 +47,7 @@ final class IOReportLogicTests: XCTestCase {
         XCTAssertEqual(IOReportChannelLogic.millijoules(500_000_000, unitLabel: "nJ"), 500)
         XCTAssertEqual(IOReportChannelLogic.millijoules(500, unitLabel: " mJ "), 500)
         XCTAssertNil(IOReportChannelLogic.millijoules(500, unitLabel: "furlongs"))
+        XCTAssertNil(IOReportChannelLogic.millijoules(-1, unitLabel: "mJ"))
     }
 
     func testPowerFromEnergyDelta() {
@@ -54,6 +56,7 @@ final class IOReportLogicTests: XCTestCase {
             IOReportChannelLogic.milliwatts(energyMillijoules: 500, intervalNs: 100_000_000),
             5_000)
         XCTAssertNil(IOReportChannelLogic.milliwatts(energyMillijoules: 500, intervalNs: 0))
+        XCTAssertNil(IOReportChannelLogic.milliwatts(energyMillijoules: -1, intervalNs: 1))
     }
 
     func testBusyPercentFromResidencies() {
@@ -74,6 +77,12 @@ final class IOReportLogicTests: XCTestCase {
             (name: "IDLE", residency: 0), (name: "P1", residency: 100),
         ])
         XCTAssertEqual(saturated ?? -1, 100, accuracy: 0.001)
+
+        let extreme = IOReportChannelLogic.busyPercent(states: [
+            (name: "IDLE", residency: Int64.max),
+            (name: "P1", residency: Int64.max),
+        ])
+        XCTAssertEqual(extreme ?? -1, 50, accuracy: 0.001)
     }
 
     func testAbsentReaderYieldsNilFieldsInSamples() {

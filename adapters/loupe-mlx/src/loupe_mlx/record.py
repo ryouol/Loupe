@@ -1,4 +1,4 @@
-"""Fixture recorder: a real mlx-lm session written as protocol-v1 events.
+"""Fixture recorder: a real mlx-lm session written as current-protocol events.
 
 A thin loop over the same `LoupeInstrument` the live adapter uses, pointed at
 a file sink — recorder events and adapter events cannot drift apart because
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import itertools
+import math
 import sys
 import uuid
 
@@ -34,7 +35,7 @@ PROMPTS = [
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="loupe_mlx.record",
-        description="Record a real mlx-lm session as protocol-v1 NDJSON events.",
+        description="Record a real mlx-lm session as current-protocol NDJSON events.",
     )
     parser.add_argument("--model", required=True, help="HF repo id or local path")
     parser.add_argument("--out", required=True, help="output .ndjson path")
@@ -46,6 +47,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if not args.model or not args.out:
+        print("--model and --out cannot be empty", file=sys.stderr)
+        return 2
+    if not math.isfinite(args.duration) or not 0.1 <= args.duration <= 3_600:
+        print("--duration must be between 0.1 and 3600 seconds", file=sys.stderr)
+        return 2
+    if not 1 <= args.max_tokens <= 4_096:
+        print("--max-tokens must be between 1 and 4096", file=sys.stderr)
+        return 2
+    if args.run_id is not None and not 1 <= len(args.run_id) <= 128:
+        print("--run-id must contain 1 to 128 characters", file=sys.stderr)
+        return 2
     try:
         import mlx_lm  # noqa: F401
     except ImportError:

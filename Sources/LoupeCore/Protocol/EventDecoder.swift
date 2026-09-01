@@ -33,8 +33,9 @@ public struct EventDropCounter: Sendable, Equatable {
     public init() {}
 
     public mutating func record(_ reason: EventDropReason) {
-        total += 1
-        byReason[reason.label, default: 0] += 1
+        if total < Int.max { total += 1 }
+        let current = byReason[reason.label, default: 0]
+        if current < Int.max { byReason[reason.label] = current + 1 }
     }
 }
 
@@ -78,6 +79,13 @@ public struct EventLineDecoder: Sendable {
             return .failure(.oversizedLine(bytes: line.count))
         }
 
+        guard
+            let raw = try? JSONSerialization.jsonObject(with: line),
+            let object = raw as? [String: Any]
+        else {
+            return .failure(.malformedJSON)
+        }
+
         // Probe v/event first so their mismatches report as themselves.
         struct Probe: Decodable {
             let v: Int?
@@ -90,14 +98,34 @@ public struct EventLineDecoder: Sendable {
         guard let version = probe.v else {
             return .failure(.invalidEnvelope("missing v"))
         }
-        guard version == EventProtocol.version else {
+        guard EventProtocol.supportedVersions.contains(version) else {
             return .failure(.unsupportedVersion(version))
         }
         guard let eventName = probe.event else {
             return .failure(.invalidEnvelope("missing event"))
         }
-        guard EventKind(rawValue: eventName) != nil else {
+        guard let kind = EventKind(rawValue: eventName) else {
             return .failure(.unknownEvent(eventName))
+        }
+
+        let legacyEnvelopeKeys = Set(["v", "ts", "runId", "requestId", "event", "payload"])
+        let allowedEnvelopeKeys =
+            EventProtocol.versionsWithSequencing.contains(version)
+            ? legacyEnvelopeKeys.union(["seq"]) : legacyEnvelopeKeys
+        guard Set(object.keys).isSubset(of: allowedEnvelopeKeys),
+            EventProtocol.versionsWithSequencing.contains(version)
+                ? object["seq"] != nil : object["seq"] == nil
+        else {
+            return .failure(.invalidEnvelope("unknown field"))
+        }
+        guard let payloadObject = object["payload"] as? [String: Any] else {
+            return .failure(.invalidPayload("payload"))
+        }
+        guard
+            Set(payloadObject.keys).isSubset(
+                of: Self.allowedPayloadKeys(for: kind, version: version))
+        else {
+            return .failure(.invalidPayload("unknown field"))
         }
 
         let envelope: EventEnvelope
@@ -114,7 +142,117 @@ public struct EventLineDecoder: Sendable {
         if envelope.kind.requiresRequestID && envelope.requestId == nil {
             return .failure(.missingRequestID(envelope.kind))
         }
+        if EventProtocol.versionsWithSequencing.contains(envelope.v), envelope.sequence == nil {
+            return .failure(.invalidEnvelope("missing seq"))
+        }
+        if envelope.v == EventProtocol.legacyVersion,
+            envelope.kind == .transportSummary || envelope.sequence != nil
+        {
+            return .failure(.invalidEnvelope("v1 extension"))
+        }
+        if let violation = semanticViolation(in: envelope) {
+            return .failure(violation)
+        }
         return .success(envelope)
+    }
+
+    /// The persisted payload boundary uses the same allow-list so database
+    /// corruption cannot smuggle fields that synthesized Codable would
+    /// otherwise ignore.
+    public static func allowedPayloadKeys(
+        for kind: EventKind, version: Int = EventProtocol.version
+    ) -> Set<String> {
+        switch kind {
+        case .sessionStart: return ["adapter", "adapterVersion", "runtime", "pid"]
+        case .clockSync: return ["t0", "t1", "t2", "t3"]
+        case .modelLoadStart: return ["modelId"]
+        case .modelLoadEnd: return ["modelId", "ok", "weightsBytes"]
+        case .requestStart: return ["promptTokens"]
+        case .prefillEnd: return ["promptTokens"]
+        case .decodeTick:
+            return version == EventProtocol.version
+                ? [
+                    "outputTokens", "kvCacheBytes", "allocatorMemoryGrowthBytes",
+                    "activeMemoryBytes", "memoryProvenance",
+                ]
+                : ["outputTokens", "kvCacheBytes", "activeMemoryBytes"]
+        case .requestEnd:
+            return version != EventProtocol.legacyVersion
+                ? ["outputTokens", "finishReason", "decodeDurationNs"]
+                : ["outputTokens", "finishReason"]
+        case .transportSummary: return ["attemptedEvents", "producerDroppedEvents"]
+        case .error: return ["code", "message"]
+        }
+    }
+
+    private func semanticViolation(in envelope: EventEnvelope) -> EventDropReason? {
+        guard isBoundedIdentifier(envelope.runId) else {
+            return .invalidEnvelope("runId")
+        }
+        if let requestID = envelope.requestId, !isBoundedIdentifier(requestID) {
+            return .invalidEnvelope("requestId")
+        }
+
+        switch envelope.payload {
+        case .sessionStart(let payload):
+            guard payload.pid > 0,
+                isBoundedString(payload.adapter, maximum: 256),
+                isBoundedString(payload.adapterVersion, maximum: 128),
+                isBoundedString(payload.runtime, maximum: 128)
+            else { return .invalidPayload("session_start") }
+        case .modelLoadStart(let payload):
+            guard isBoundedString(payload.modelId, maximum: 1_024) else {
+                return .invalidPayload("modelId")
+            }
+        case .modelLoadEnd(let payload):
+            guard isBoundedString(payload.modelId, maximum: 1_024) else {
+                return .invalidPayload("modelId")
+            }
+        case .requestEnd(let payload):
+            guard isBoundedString(payload.finishReason, maximum: 64),
+                payload.decodeDurationNs.map({ $0 > 0 }) ?? true
+            else {
+                return .invalidPayload("finishReason")
+            }
+        case .decodeTick(let payload):
+            if envelope.v == EventProtocol.version {
+                switch payload.memoryProvenance {
+                case .runtimeMeasuredKV, .architectureModeledKV:
+                    guard payload.kvCacheBytes != nil,
+                        payload.allocatorMemoryGrowthBytes == nil
+                    else { return .invalidPayload("decode_tick memory provenance") }
+                case .allocatorDeltaProxy:
+                    guard payload.kvCacheBytes == nil,
+                        payload.allocatorMemoryGrowthBytes != nil
+                    else { return .invalidPayload("decode_tick memory provenance") }
+                case nil:
+                    return .invalidPayload("decode_tick memory provenance")
+                }
+            } else if payload.kvCacheBytes == nil || payload.allocatorMemoryGrowthBytes != nil
+                || payload.memoryProvenance != nil
+            {
+                return .invalidPayload("decode_tick legacy memory")
+            }
+        case .transportSummary(let payload):
+            guard EventProtocol.versionsWithSequencing.contains(envelope.v),
+                payload.producerDroppedEvents <= payload.attemptedEvents
+            else { return .invalidPayload("transport_summary") }
+        case .error(let payload):
+            guard isBoundedString(payload.code, maximum: 128), payload.message.count <= 4_096 else {
+                return .invalidPayload("error")
+            }
+        case .clockSync, .requestStart, .prefillEnd:
+            break
+        }
+        return nil
+    }
+
+    private func isBoundedIdentifier(_ value: String) -> Bool {
+        isBoundedString(value, maximum: 128)
+    }
+
+    private func isBoundedString(_ value: String, maximum: Int) -> Bool {
+        !value.isEmpty && value.count <= maximum
     }
 
     private func describe(_ error: any Error) -> String {
@@ -137,5 +275,98 @@ public struct EventLineEncoder: Sendable {
     /// No trailing newline — the NDJSON writer owns framing.
     public func encode(_ envelope: EventEnvelope) throws -> Data {
         try JSONEncoder.deterministic().encode(envelope)
+    }
+}
+
+/// Stateful semantic validation for a complete event stream. The line
+/// decoder proves each envelope in isolation; this proves the envelopes form
+/// one usable session rather than a collection of individually valid lies.
+public struct EventStreamValidator: Sendable {
+    private var runID: String?
+    private var didStart = false
+    private var activeRequests: Set<String> = []
+    private var prefilledRequests: Set<String> = []
+    private var seenRequestIDs: Set<String> = []
+    private var outputTokens: [String: UInt32] = [:]
+    private var lastTimestamp: UInt64?
+    private var version: Int?
+    private var lastSequence: UInt64?
+    private var didSummarize = false
+    private var allProducerWindowsClosed = true
+
+    public init() {}
+
+    public var hasStartedSession: Bool { didStart }
+    public var hasOpenRequests: Bool { !activeRequests.isEmpty }
+    public var hasTerminalSummary: Bool { didSummarize && allProducerWindowsClosed }
+
+    public mutating func accepts(_ envelope: EventEnvelope) -> Bool {
+        guard (!didSummarize || envelope.kind == .sessionStart),
+            runID.map({ $0 == envelope.runId }) ?? true,
+            lastTimestamp.map({ envelope.ts >= $0 }) ?? true
+        else { return false }
+
+        if envelope.kind == .sessionStart {
+            if didStart && !didSummarize { allProducerWindowsClosed = false }
+            version = envelope.v
+            lastSequence = nil
+            didSummarize = false
+        } else if version.map({ $0 == envelope.v }) == false {
+            return false
+        }
+        if EventProtocol.versionsWithSequencing.contains(envelope.v) {
+            guard let sequence = envelope.sequence,
+                lastSequence.map({ sequence > $0 }) ?? (sequence == 1)
+            else { return false }
+            lastSequence = sequence
+        } else if envelope.sequence != nil {
+            return false
+        }
+
+        switch envelope.payload {
+        case .sessionStart:
+            runID = envelope.runId
+            didStart = true
+            activeRequests.removeAll(keepingCapacity: true)
+            prefilledRequests.removeAll(keepingCapacity: true)
+            outputTokens.removeAll(keepingCapacity: true)
+        case .clockSync, .modelLoadStart, .modelLoadEnd, .error:
+            guard didStart else { return false }
+        case .requestStart:
+            guard didStart, let requestID = envelope.requestId,
+                activeRequests.count < 1_024,
+                seenRequestIDs.insert(requestID).inserted,
+                activeRequests.insert(requestID).inserted
+            else { return false }
+            outputTokens[requestID] = 0
+        case .prefillEnd:
+            guard let requestID = envelope.requestId,
+                activeRequests.contains(requestID),
+                prefilledRequests.insert(requestID).inserted
+            else { return false }
+        case .decodeTick(let payload):
+            guard let requestID = envelope.requestId,
+                activeRequests.contains(requestID),
+                prefilledRequests.contains(requestID),
+                payload.outputTokens >= (outputTokens[requestID] ?? 0)
+            else { return false }
+            outputTokens[requestID] = payload.outputTokens
+        case .requestEnd(let payload):
+            guard let requestID = envelope.requestId,
+                activeRequests.contains(requestID),
+                payload.outputTokens >= (outputTokens[requestID] ?? 0)
+            else { return false }
+            activeRequests.remove(requestID)
+            prefilledRequests.remove(requestID)
+            outputTokens.removeValue(forKey: requestID)
+        case .transportSummary(let payload):
+            guard didStart, activeRequests.isEmpty,
+                let sequence = envelope.sequence,
+                payload.attemptedEvents == sequence - 1
+            else { return false }
+            didSummarize = true
+        }
+        lastTimestamp = envelope.ts
+        return true
     }
 }

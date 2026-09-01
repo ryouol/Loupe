@@ -8,6 +8,45 @@ import XCTest
 /// Everything here runs from the recorded fixtures under fixtures/llamacpp/
 /// — no live server needed, per the acceptance.
 final class LoupeLlamaCppTests: XCTestCase {
+    func testPromptInputIsBoundedAndInlinePromptIsRejected() throws {
+        func handle(_ data: Data) throws -> FileHandle {
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("loupe-prompt-\(UUID().uuidString)")
+            try data.write(to: url, options: .withoutOverwriting)
+            addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+            return try FileHandle(forReadingFrom: url)
+        }
+
+        let maximum = Data(repeating: UInt8(ascii: "s"), count: PromptInput.maxBytes)
+        let maximumHandle = try handle(maximum)
+        defer { try? maximumHandle.close() }
+        XCTAssertEqual(try PromptInput.read(from: maximumHandle).utf8.count, PromptInput.maxBytes)
+
+        let oversizedHandle = try handle(maximum + Data([UInt8(ascii: "x")]))
+        defer { try? oversizedHandle.close() }
+        XCTAssertThrowsError(try PromptInput.read(from: oversizedHandle)) { error in
+            XCTAssertEqual(error as? PromptInputError, .tooLarge)
+        }
+
+        let invalidHandle = try handle(Data([0xFF]))
+        defer { try? invalidHandle.close() }
+        XCTAssertThrowsError(try PromptInput.read(from: invalidHandle)) { error in
+            XCTAssertEqual(error as? PromptInputError, .invalidUTF8)
+        }
+
+        let secret = "customer prompt must not appear in argv"
+        XCTAssertThrowsError(
+            try PromptInput.validateCommandLine(["--prompt", secret])
+        ) { error in
+            XCTAssertEqual(error as? PromptInputError, .inlinePromptUnsupported)
+        }
+        XCTAssertThrowsError(try PromptInput.validateCommandLine(["--prompt=customer-secret"])) {
+            error in
+            XCTAssertEqual(error as? PromptInputError, .inlinePromptUnsupported)
+        }
+        XCTAssertNoThrow(try PromptInput.validateCommandLine(["--prompt-stdin"]))
+    }
+
     private static let fixtures = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
         .deletingLastPathComponent()
@@ -57,6 +96,24 @@ final class LoupeLlamaCppTests: XCTestCase {
         XCTAssertEqual(parsed.count, 2)
     }
 
+    func testPrometheusParserRejectsNonFiniteValues() {
+        let parsed = PrometheusParser.parse(
+            """
+            finite 12.5
+            nan NaN
+            positive_inf +Inf
+            negative_inf -Inf
+            """)
+        XCTAssertEqual(parsed, ["finite": 12.5])
+    }
+
+    func testHTTPClientUsesNoRedirectDelegateOrProxy() {
+        let session = AdapterHTTP.session()
+        XCTAssertTrue(session.delegate is LocalOnlySessionDelegate)
+        XCTAssertEqual(session.configuration.connectionProxyDictionary?.count, 0)
+        session.invalidateAndCancel()
+    }
+
     // MARK: /completion stream
 
     func testCompletionStreamParsesChunksAndTimings() throws {
@@ -90,6 +147,14 @@ final class LoupeLlamaCppTests: XCTestCase {
         XCTAssertEqual(kv.bytes(forTokens: 38), 466_944)
         XCTAssertEqual(kv.bytes(forTokens: 0), 0)
         XCTAssertEqual(kv.bytes(forTokens: -5), 0)
+    }
+
+    func testKVCacheArithmeticSaturatesHostileDimensions() {
+        let kv = KVCacheModel(
+            layers: Int.max, headDimension: Int.max, kvHeads: Int.max,
+            bytesPerElement: Int.max)
+        XCTAssertEqual(kv.bytesPerToken, Int.max)
+        XCTAssertEqual(kv.bytes(forTokens: Int.max), UInt64.max)
     }
 
     // MARK: Event mapping
@@ -134,6 +199,10 @@ final class LoupeLlamaCppTests: XCTestCase {
         }
         XCTAssertEqual(end.outputTokens, 25)
         XCTAssertEqual(end.finishReason, "stop")
+        XCTAssertNotNil(end.decodeDurationNs)
+        XCTAssertEqual(
+            SessionMetrics.perRequest(events: events).first?.decodeTokensPerSecond ?? -1,
+            220.32, accuracy: 0.01)
 
         // The whole trace validates against the wire contract.
         let encoder = EventLineEncoder()
@@ -152,8 +221,74 @@ final class LoupeLlamaCppTests: XCTestCase {
         let chunks = [LlamaCompletionChunk(content: "hi", stop: false, timings: nil)]
         let events = LlamaRequestTrace.events(
             runId: "r", requestId: "q-1", requestStartNs: 10,
-            chunkArrivalsNs: [20], chunks: chunks, kv: KVCacheModel(layers: 1, headDimension: 1, kvHeads: 1))
+            chunkArrivalsNs: [20], chunks: chunks,
+            kv: KVCacheModel(layers: 1, headDimension: 1, kvHeads: 1))
         XCTAssertEqual(events.map(\.kind), [.requestStart, .error, .requestEnd])
+    }
+
+    func testExtremeFiniteTimingsSaturateWithoutTrapping() {
+        let timings = LlamaTimings(
+            promptN: Int.max, promptMs: .greatestFiniteMagnitude,
+            predictedN: Int.max, predictedMs: .greatestFiniteMagnitude,
+            predictedPerSecond: 1)
+        let chunks = [
+            LlamaCompletionChunk(content: "x", stop: true, timings: timings)
+        ]
+        let events = LlamaRequestTrace.events(
+            runId: "r", requestId: "q-1", requestStartNs: UInt64.max - 5,
+            chunkArrivalsNs: [UInt64.max - 1], chunks: chunks,
+            kv: KVCacheModel(layers: 1, headDimension: 1, kvHeads: 1))
+
+        XCTAssertEqual(events.map(\.ts), events.map(\.ts).sorted())
+        XCTAssertEqual(events.last?.ts, UInt64.max)
+    }
+
+    func testOneTokenEarlyStopPreservesRuntimeReportedRate() {
+        let timings = LlamaTimings(
+            promptN: 8, promptMs: 100, predictedN: 1, predictedMs: 50,
+            predictedPerSecond: 20)
+        let chunks = [
+            LlamaCompletionChunk(content: "x", stop: true, timings: timings)
+        ]
+        let events = LlamaRequestTrace.events(
+            runId: "r", requestId: "q", requestStartNs: 1_000,
+            chunkArrivalsNs: [1_001], chunks: chunks,
+            kv: KVCacheModel(layers: 1, headDimension: 1, kvHeads: 1))
+
+        let metric = SessionMetrics.perRequest(events: events).first
+        XCTAssertEqual(metric?.outputTokens, 1)
+        XCTAssertEqual(metric?.ttftNs, 1)
+        XCTAssertEqual(metric?.decodeDurationNs, 50_000_000)
+        XCTAssertEqual(metric?.decodeTokensPerSecond ?? -1, 20, accuracy: 0.001)
+    }
+
+    func testMissingRuntimeMillisecondsFallsBackToReportedRate() {
+        let timings = LlamaTimings(
+            promptN: 8, promptMs: 100, predictedN: 1, predictedMs: 0,
+            predictedPerSecond: 25)
+        let events = LlamaRequestTrace.events(
+            runId: "r", requestId: "q", requestStartNs: 1_000,
+            chunkArrivalsNs: [1_001],
+            chunks: [LlamaCompletionChunk(content: "x", stop: true, timings: timings)],
+            kv: KVCacheModel(layers: 1, headDimension: 1, kvHeads: 1))
+
+        let metric = SessionMetrics.perRequest(events: events).first
+        XCTAssertEqual(metric?.decodeDurationNs, 40_000_000)
+        XCTAssertEqual(metric?.decodeTokensPerSecond ?? -1, 25, accuracy: 0.001)
+    }
+
+    func testRuntimeRateFallbackSaturatesWithoutConversionTrap() {
+        let timings = LlamaTimings(
+            promptN: 1, promptMs: 1, predictedN: 1, predictedMs: 0,
+            predictedPerSecond: .leastNonzeroMagnitude)
+        let events = LlamaRequestTrace.events(
+            runId: "r", requestId: "q", requestStartNs: 1,
+            chunkArrivalsNs: [2],
+            chunks: [LlamaCompletionChunk(content: "x", stop: true, timings: timings)],
+            kv: KVCacheModel(layers: 1, headDimension: 1, kvHeads: 1))
+
+        XCTAssertEqual(
+            SessionMetrics.perRequest(events: events).first?.decodeDurationNs, UInt64.max)
     }
 
     // MARK: PID resolution
@@ -187,10 +322,95 @@ final class LoupeLlamaCppTests: XCTestCase {
         XCTAssertGreaterThan(port, 0)
 
         XCTAssertEqual(
-            ListeningPortResolver.pid(listeningOn: port),
+            ListeningPortResolver.pid(listeningAt: "127.0.0.1", port: port),
             ProcessInfo.processInfo.processIdentifier)
+        XCTAssertNil(ListeningPortResolver.pid(listeningAt: "::1", port: port))
+        XCTAssertNil(ListeningPortResolver.pid(listeningAt: "127.0.0.2", port: port))
         XCTAssertNil(
-            ListeningPortResolver.pid(listeningOn: 1),
+            ListeningPortResolver.pid(listeningAt: "127.0.0.1", port: 1),
             "nothing listens on port 1 without root")
+    }
+
+    func testResolverDistinguishesIPv6ListenerFromIPv4OnSamePortNumber() throws {
+        let fd = socket(AF_INET6, SOCK_STREAM, 0)
+        XCTAssertGreaterThanOrEqual(fd, 0)
+        defer { close(fd) }
+        var ipv6Only: Int32 = 1
+        XCTAssertEqual(
+            setsockopt(
+                fd, IPPROTO_IPV6, IPV6_V6ONLY, &ipv6Only,
+                socklen_t(MemoryLayout<Int32>.size)),
+            0)
+        var address = sockaddr_in6()
+        address.sin6_family = sa_family_t(AF_INET6)
+        address.sin6_addr = in6addr_loopback
+        address.sin6_port = 0
+        let bound = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in6>.size))
+            }
+        }
+        XCTAssertEqual(bound, 0)
+        XCTAssertEqual(listen(fd, 1), 0)
+
+        var assigned = sockaddr_in6()
+        var size = socklen_t(MemoryLayout<sockaddr_in6>.size)
+        _ = withUnsafeMutablePointer(to: &assigned) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                getsockname(fd, $0, &size)
+            }
+        }
+        let port = UInt16(bigEndian: assigned.sin6_port)
+        XCTAssertEqual(
+            ListeningPortResolver.pid(listeningAt: "::1", port: port),
+            ProcessInfo.processInfo.processIdentifier)
+        XCTAssertNil(ListeningPortResolver.pid(listeningAt: "127.0.0.1", port: port))
+    }
+
+    func testSocketWriterReconnectsWhenListenerAppears() throws {
+        let directory = URL(fileURLWithPath: "/tmp/loupe-llama-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let socketPath = directory.appendingPathComponent("adapter.sock").path
+        let writer = UnixSocketLineWriter(socketPath: socketPath)
+
+        let listener = socket(AF_UNIX, SOCK_STREAM, 0)
+        XCTAssertGreaterThanOrEqual(listener, 0)
+        defer { close(listener) }
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        withUnsafeMutableBytes(of: &address.sun_path) { raw in
+            raw.copyBytes(from: Array(socketPath.utf8))
+        }
+        let bound = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(listener, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        XCTAssertEqual(bound, 0)
+        XCTAssertEqual(listen(listener, 1), 0)
+
+        writer.send(Data("hello".utf8))
+        let client = accept(listener, nil, nil)
+        XCTAssertGreaterThanOrEqual(client, 0)
+        defer { close(client) }
+        var bytes = [UInt8](repeating: 0, count: 16)
+        let count = read(client, &bytes, bytes.count)
+        XCTAssertEqual(String(decoding: bytes.prefix(max(0, count)), as: UTF8.self), "hello\n")
+        XCTAssertEqual(writer.dropped, 0)
+        writer.close()
+    }
+
+    func testSocketWriterMissingListenerHasBoundedRetryCost() {
+        let writer = UnixSocketLineWriter(
+            socketPath: "/tmp/loupe-llama-missing-\(UUID().uuidString.prefix(8)).sock")
+        let clock = ContinuousClock()
+        let start = clock.now
+        for _ in 0..<10_000 { writer.send(Data("line".utf8)) }
+        let elapsed = clock.now - start
+
+        XCTAssertEqual(writer.dropped, 10_000)
+        XCTAssertLessThan(elapsed, .seconds(1))
+        writer.close()
     }
 }

@@ -1,7 +1,6 @@
 import sys
 
 import pytest
-
 from loupe_mlx.record import PROMPTS, build_parser, main
 
 
@@ -25,3 +24,10 @@ def test_main_without_mlx_fails_cleanly(monkeypatch, tmp_path) -> None:
     monkeypatch.setitem(sys.modules, "mlx.core", None)
     exit_code = main(["--model", "m", "--out", str(tmp_path / "x.ndjson")])
     assert exit_code == 2
+
+
+def test_main_rejects_unsafe_limits_before_import(tmp_path) -> None:
+    output = str(tmp_path / "x.ndjson")
+    assert main(["--model", "m", "--out", output, "--duration", "inf"]) == 2
+    assert main(["--model", "m", "--out", output, "--max-tokens", "0"]) == 2
+    assert main(["--model", "m", "--out", output, "--run-id", "r" * 129]) == 2

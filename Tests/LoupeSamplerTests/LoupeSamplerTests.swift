@@ -3,6 +3,7 @@ import XCTest
 
 @testable import LoupeCore
 @testable import LoupeSampler
+@testable import LoupeTelemetry
 
 final class CPUDeltaTrackerTests: XCTestCase {
     func testFirstSampleReportsZero() {
@@ -43,12 +44,13 @@ final class ReplaySourceTests: XCTestCase {
         return url
     }
 
-    private func sampleLine(ts: UInt64, rss: UInt64) -> String {
-        """
-        {"system":{"ts":\(ts),"thermalState":"nominal","memoryUsedBytes":1024,\
-        "memoryFreeBytes":2048,"swapUsedBytes":0},\
-        "process":{"ts":\(ts),"pid":42,"cpuPercent":12.5,"rssBytes":\(rss)}}
-        """
+    private func sampleLine(ts: UInt64, rss: UInt64, sequence: UInt64? = nil) -> String {
+        let sequenceField = sequence.map { #""acquisitionSequence":\#($0),"# } ?? ""
+        return """
+            {\(sequenceField)"system":{"ts":\(ts),"thermalState":"nominal","memoryUsedBytes":1024,\
+            "memoryFreeBytes":2048,"swapUsedBytes":0},\
+            "process":{"ts":\(ts),"pid":42,"cpuPercent":12.5,"rssBytes":\(rss)}}
+            """
     }
 
     func testReplayTelemetryYieldsAllSamplesInOrder() async throws {
@@ -83,6 +85,72 @@ final class ReplaySourceTests: XCTestCase {
         XCTAssertEqual(dropped, 1)
     }
 
+    func testReplayTelemetryDropsNonmonotonicAcquisitionSequence() async throws {
+        let url = try temporaryFile(lines: [
+            sampleLine(ts: 100, rss: 1, sequence: 1),
+            sampleLine(ts: 150, rss: 2, sequence: 1),
+            sampleLine(ts: 200, rss: 3, sequence: 3),
+        ])
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let source = ReplayTelemetrySource(fileURL: url)
+        var collected: [SystemSample] = []
+        for await sample in await source.stream() { collected.append(sample) }
+        XCTAssertEqual(collected.map(\.acquisitionSequence), [1, 3])
+        let dropped = await source.droppedLines
+        XCTAssertEqual(dropped, 1)
+    }
+
+    func testReplayTelemetryDropsSemanticallyInvalidValues() async throws {
+        let invalid =
+            """
+            {"system":{"ts":150,"thermalState":"nominal","memoryUsedBytes":1024,"memoryFreeBytes":2048,"swapUsedBytes":0,"gpuBusyPercent":101},"process":{"ts":150,"pid":42,"cpuPercent":-1,"rssBytes":1}}
+            """
+        let url = try temporaryFile(lines: [
+            sampleLine(ts: 100, rss: 1), invalid, sampleLine(ts: 200, rss: 2),
+        ])
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let source = ReplayTelemetrySource(fileURL: url)
+        var timestamps: [UInt64] = []
+        for await sample in await source.stream() {
+            timestamps.append(sample.system.ts)
+        }
+        XCTAssertEqual(timestamps, [100, 200])
+        let dropped = await source.droppedLines
+        XCTAssertEqual(dropped, 1)
+    }
+
+    func testReplayTelemetryRejectsAllMalformedRowsAsCorruption() async throws {
+        let url = try temporaryFile(lines: ["{broken", "[]"])
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let source = ReplayTelemetrySource(fileURL: url)
+        var count = 0
+        for await _ in await source.stream() { count += 1 }
+
+        XCTAssertEqual(count, 0)
+        let dropped = await source.droppedLines
+        let failure = await source.loadFailure
+        XCTAssertEqual(dropped, 2)
+        XCTAssertNotNil(failure)
+    }
+
+    func testReplayTelemetryAllowsGenuinelyEmptyEventOnlySession() async throws {
+        let url = try temporaryFile(lines: [])
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let source = ReplayTelemetrySource(fileURL: url)
+        var count = 0
+        for await _ in await source.stream() { count += 1 }
+
+        XCTAssertEqual(count, 0)
+        let dropped = await source.droppedLines
+        let failure = await source.loadFailure
+        XCTAssertEqual(dropped, 0)
+        XCTAssertNil(failure)
+    }
+
     func testReplayTelemetryMissingFileFinishesEmptyWithFailureRecorded() async {
         let source = ReplayTelemetrySource(
             fileURL: URL(fileURLWithPath: "/nonexistent/loupe.ndjson"))
@@ -91,6 +159,19 @@ final class ReplaySourceTests: XCTestCase {
         XCTAssertEqual(count, 0)
         let failure = await source.loadFailure
         XCTAssertNotNil(failure)
+    }
+
+    func testReplayReaderRejectsSymlinks() throws {
+        let target = try temporaryFile(lines: [sampleLine(ts: 100, rss: 1)])
+        let link = FileManager.default.temporaryDirectory
+            .appendingPathComponent("loupe-link-\(UUID().uuidString).ndjson")
+        defer {
+            try? FileManager.default.removeItem(at: target)
+            try? FileManager.default.removeItem(at: link)
+        }
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        XCTAssertThrowsError(
+            try ReplayResourceLimits.read(link, maximumBytes: 1_048_576))
     }
 
     func testReplayEventSourceStreamsProtocolExamples() async throws {
@@ -116,6 +197,20 @@ final class ReplaySourceTests: XCTestCase {
         XCTAssertEqual(count, 0)
         let drops = await source.drops
         XCTAssertEqual(drops.total, 9)
+        let failure = await source.loadFailure
+        XCTAssertNotNil(failure)
+    }
+
+    func testReplayEventSourceAllowsAnEmptyTelemetryOnlySession() async throws {
+        let url = try temporaryFile(lines: [])
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let source = ReplayEventSource(fileURL: url)
+        var count = 0
+        for await _ in await source.stream() { count += 1 }
+        XCTAssertEqual(count, 0)
+        let failure = await source.loadFailure
+        XCTAssertNil(failure)
     }
 }
 
@@ -184,5 +279,70 @@ final class LiveTelemetrySourceTests: XCTestCase {
             XCTAssertGreaterThan(sample.system.memoryUsedBytes, 0)
             break
         }
+    }
+
+    func testForcedBackpressureIsCountedAndSequenced() async {
+        let source = LiveTelemetrySource(
+            targetPID: nil, cadence: .milliseconds(1), bufferLimit: 1)
+
+        func letProducerRunAhead() async -> SystemSample? {
+            let stream = await source.stream()
+            try? await Task.sleep(for: .milliseconds(40))
+            var iterator = stream.makeAsyncIterator()
+            return await iterator.next()
+        }
+
+        let retained = await letProducerRunAhead()
+        try? await Task.sleep(for: .milliseconds(20))
+        let stats = await source.acquisitionStats()
+        XCTAssertGreaterThan(retained?.acquisitionSequence ?? 0, 1)
+        XCTAssertGreaterThan(stats.droppedSamples, 0)
+        XCTAssertGreaterThan(stats.lowerBound, 0)
+    }
+}
+
+final class RecordingTelemetrySourceTests: XCTestCase {
+    func testPrivilegedPowerMergesWithoutBreakingLocalTimestampAlignment() {
+        let local = SystemSample(
+            system: SystemWideSample(
+                ts: 100, thermalState: .fair, memoryUsedBytes: 10,
+                memoryFreeBytes: 20, swapUsedBytes: 30,
+                gpuBusyPercent: nil, gpuPowerMilliwatts: nil,
+                anePowerMilliwatts: 4, packagePowerMilliwatts: nil),
+            process: ProcessSample(ts: 100, pid: 42, cpuPercent: 5, rssBytes: 40))
+        let privileged = SystemWideSample(
+            ts: 95, thermalState: .critical, memoryUsedBytes: 999,
+            memoryFreeBytes: 999, swapUsedBytes: 999,
+            gpuBusyPercent: 75, gpuPowerMilliwatts: 2,
+            anePowerMilliwatts: nil, packagePowerMilliwatts: 6)
+
+        let merged = RecordingTelemetrySource.merging(
+            local: local, privileged: privileged)
+
+        XCTAssertEqual(merged.system.ts, 100)
+        XCTAssertEqual(merged.process?.ts, 100)
+        XCTAssertEqual(merged.system.thermalState, .fair)
+        XCTAssertEqual(merged.system.memoryUsedBytes, 10)
+        XCTAssertEqual(merged.system.gpuBusyPercent, 75)
+        XCTAssertEqual(merged.system.gpuPowerMilliwatts, 2)
+        XCTAssertEqual(merged.system.anePowerMilliwatts, 4)
+        XCTAssertEqual(merged.system.packagePowerMilliwatts, 6)
+    }
+
+    func testStalePrivilegedPowerIsNotStampedOntoCurrentLocalRows() {
+        let local = SystemSample(
+            system: SystemWideSample(
+                ts: 20_000_000_000, thermalState: .nominal,
+                memoryUsedBytes: 10, memoryFreeBytes: 20, swapUsedBytes: 0),
+            process: nil)
+        let stale = SystemWideSample(
+            ts: 1, thermalState: .nominal,
+            memoryUsedBytes: 1, memoryFreeBytes: 1, swapUsedBytes: 0,
+            gpuBusyPercent: 99, packagePowerMilliwatts: 9_999)
+
+        let merged = RecordingTelemetrySource.merging(
+            local: local, privileged: stale, maximumSkewNs: 5_000_000_000)
+        XCTAssertNil(merged.system.gpuBusyPercent)
+        XCTAssertNil(merged.system.packagePowerMilliwatts)
     }
 }

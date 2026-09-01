@@ -29,9 +29,7 @@ enum TimelineGeometry {
         return assignment
     }
 
-    static func requestSpans(
-        metrics: [RequestMetrics], milestones: [ReplayViewModel.Milestone]
-    ) -> [RequestSpan] {
+    static func requestSpans(milestones: [ReplayViewModel.Milestone]) -> [RequestSpan] {
         // Milestones carry offsets on the shared timeline; index them per
         // request so span edges come from the same clock as the charts.
         var startBy: [String: Double] = [:]
@@ -46,12 +44,14 @@ enum TimelineGeometry {
             default: break
             }
         }
-        let ordered = metrics.compactMap { metric -> (String, Double, Double, Double)? in
-            guard let start = startBy[metric.requestId], let end = endBy[metric.requestId]
+        let ordered = startBy.compactMap { requestId, start -> (String, Double, Double, Double)? in
+            guard let end = endBy[requestId]
             else { return nil }
-            return (metric.requestId, start, prefillBy[metric.requestId] ?? start, end)
+            return (requestId, start, prefillBy[requestId] ?? start, end)
         }
-        .sorted { $0.1 < $1.1 }
+        .sorted { lhs, rhs in
+            lhs.1 == rhs.1 ? lhs.0 < rhs.0 : lhs.1 < rhs.1
+        }
         let lanes = packLanes(ordered.map { (start: $0.1, end: $0.3) })
         return zip(ordered, lanes).map { span, lane in
             RequestSpan(

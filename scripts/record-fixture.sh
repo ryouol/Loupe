@@ -8,6 +8,20 @@ NAME="${1:?usage: record-fixture.sh <name> [duration-seconds]}"
 DURATION="${2:-60}"
 MODEL="${LOUPE_FIXTURE_MODEL:-mlx-community/Qwen2.5-0.5B-Instruct-4bit}"
 
+if [[ ! "$NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then
+    echo "fixture name must be a simple 1-64 character filename stem" >&2
+    exit 2
+fi
+if [[ ! "$DURATION" =~ ^[0-9]{1,4}$ ]]; then
+    echo "duration must be an integer from 1 to 3300 seconds" >&2
+    exit 2
+fi
+DURATION=$((10#$DURATION))
+if ((DURATION < 1 || DURATION > 3300)); then
+    echo "duration must be an integer from 1 to 3300 seconds" >&2
+    exit 2
+fi
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 

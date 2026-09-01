@@ -4,7 +4,8 @@ import SwiftUI
 
 struct OverviewView: View {
     let daemonModel: DaemonViewModel
-    let sessionName: String?
+    let onStartRecording: () -> Void
+    let onOpenSample: () -> Void
     let onOpenSession: () -> Void
     let onShowDaemon: () -> Void
 
@@ -14,11 +15,17 @@ struct OverviewView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 24) {
+            VStack(alignment: .leading, spacing: 24) {
                 hero
-                HStack(alignment: .top, spacing: 16) {
-                    machineCard
-                    statusCard
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .top, spacing: 16) {
+                        machineCard
+                        statusCard
+                    }
+                    VStack(spacing: 16) {
+                        machineCard
+                        statusCard
+                    }
                 }
             }
             .padding(28)
@@ -30,30 +37,44 @@ struct OverviewView: View {
     }
 
     private var hero: some View {
-        VStack(spacing: 10) {
-            Image(nsImage: NSApp.applicationIconImage)
-                .resizable()
-                .frame(width: 96, height: 96)
-            Text("Loupe")
-                .font(.system(size: 34, weight: .bold, design: .rounded))
-            Text("Correlate system telemetry with inference events on one timeline.")
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 18) {
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .frame(width: 72, height: 72)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Understand local inference, request by request")
+                        .font(.largeTitle.weight(.semibold))
+                    Text(
+                        "Loupe correlates runtime milestones with process and system telemetry "
+                            + "on one inspectable timeline. Data stays on this Mac."
+                    )
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+            }
             HStack(spacing: 12) {
-                Button(action: onOpenSession) {
-                    Label(
-                        sessionName.map { "Session: \($0)" } ?? "Open Session…",
-                        systemImage: "folder")
+                Button(action: onStartRecording) {
+                    Label("Start recording", systemImage: "record.circle")
                 }
                 .controlSize(.large)
                 .buttonStyle(.borderedProminent)
-                Button(action: onShowDaemon) {
-                    Label("Set Up Daemon", systemImage: "bolt.shield")
+                Button(action: onOpenSample) {
+                    Label("Open sample session", systemImage: "play.rectangle")
+                }
+                .controlSize(.large)
+                Button(action: onOpenSession) {
+                    Label("Import session…", systemImage: "folder")
                 }
                 .controlSize(.large)
             }
-            .padding(.top, 6)
+            Button(action: onShowDaemon) {
+                Label("Optional GPU and power helper", systemImage: "bolt.shield")
+            }
+            .buttonStyle(.link)
         }
-        .padding(.top, 16)
+        .accessibilityElement(children: .contain)
     }
 
     private var machineCard: some View {
@@ -61,10 +82,7 @@ struct OverviewView: View {
             VStack(alignment: .leading, spacing: 8) {
                 row("cpu", host.chip)
                 row("memorychip", "\(formattedBytes(host.memoryBytes)) unified memory")
-                row(
-                    "square.grid.2x2",
-                    "\(host.performanceCores) performance + \(host.efficiencyCores) efficiency cores"
-                )
+                row("square.grid.2x2", coreSummary)
                 row("macwindow", "\(host.osVersion) (\(host.osBuild))")
             }
             .padding(6)
@@ -74,15 +92,22 @@ struct OverviewView: View {
         }
     }
 
+    private var coreSummary: String {
+        guard host.performanceCores > 0 || host.efficiencyCores > 0 else {
+            return "Core topology unavailable"
+        }
+        return "\(host.performanceCores) performance + \(host.efficiencyCores) efficiency cores"
+    }
+
     private var statusCard: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 8) {
                 DaemonStatusIndicator(status: daemonModel.status, label: daemonModel.statusLabel)
                 Text(
                     daemonModel.isObservedMode
-                        ? "Observed mode: CPU, memory, swap, and thermal state only. "
-                            + "Install the daemon to unlock GPU and power channels."
-                        : "Full telemetry available."
+                        ? "Local recording captures memory, thermal state, and observed-process "
+                            + "CPU/RSS. The optional helper adds GPU and power where supported."
+                        : "The approved helper is available for GPU and power telemetry."
                 )
                 .font(.callout)
                 .foregroundStyle(.secondary)

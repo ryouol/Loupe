@@ -1,0 +1,23 @@
+# Privacy notice draft
+
+Effective date: not yet approved for release.
+
+Loupe is designed to operate locally on your Mac. The current application has
+no account system, analytics SDK, advertising SDK, crash uploader, telemetry
+endpoint, or automatic cloud-sync path.
+
+Loupe processes runtime metadata, local system/process telemetry, session names,
+adapter errors, and benchmark specifications. Built-in adapters have no prompt
+or generated-text event fields and sanitize generation failures. Names,
+third-party adapter metadata, model identifiers, timing, and benchmark prompt
+corpora can still be sensitive. Inspect files before sharing them.
+
+Sessions remain below the current user's Application Support directory until
+that user deletes them. Imported files remain where the user selected them.
+Export occurs only after the user chooses a destination. The Loupe app and
+helper do not upload sessions; the llama.cpp adapter accepts loopback servers
+only. Optional model/runtime tools can access the network independently.
+
+A real privacy/support contact and jurisdiction-specific disclosures must be
+added before commercial distribution. The repository owner must have counsel
+approve this draft; it is not legal advice or a completed privacy policy.

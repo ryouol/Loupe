@@ -78,9 +78,9 @@ public enum AnnotationEngine {
             guard current.thermalState > previous.thermalState else { continue }
             let at = current.ts
             let before = tokenRate(
-                in: tickTimestamps, from: at &- config.thermalWindowNs, to: at)
+                in: tickTimestamps, from: subtracting(config.thermalWindowNs, from: at), to: at)
             let after = tokenRate(
-                in: tickTimestamps, from: at, to: at &+ config.thermalWindowNs)
+                in: tickTimestamps, from: at, to: adding(config.thermalWindowNs, to: at))
             guard let before, let after, after < before * (1 - config.rateDropFraction)
             else { continue }
             annotations.append(
@@ -94,8 +94,8 @@ public enum AnnotationEngine {
                         sampleTimestamps: [previous.ts, current.ts],
                         eventTimestamps: cap(
                             ticksBetween(
-                                tickTimestamps, at &- config.thermalWindowNs,
-                                at &+ config.thermalWindowNs)),
+                                tickTimestamps, subtracting(config.thermalWindowNs, from: at),
+                                adding(config.thermalWindowNs, to: at))),
                         values: [
                             "rateBeforePerSecond": before,
                             "rateAfterPerSecond": after,
@@ -115,17 +115,20 @@ public enum AnnotationEngine {
         for sample in samples {
             let at = sample.system.ts
             guard at > window,
-                let earlierIndex = nearestSampleIndex(in: samples, to: at &- window)
+                let earlierIndex = nearestSampleIndex(
+                    in: samples, to: subtracting(window, from: at))
             else { continue }
             let earlier = samples[earlierIndex].system
-            guard sample.system.swapUsedBytes > earlier.swapUsedBytes + config.swapRiseBytes
+            guard sample.system.swapUsedBytes > earlier.swapUsedBytes,
+                sample.system.swapUsedBytes - earlier.swapUsedBytes > config.swapRiseBytes
             else { continue }
             let rateEarlier = tokenRate(
-                in: tickTimestamps, from: earlier.ts &- window, to: earlier.ts)
-            let rateNow = tokenRate(in: tickTimestamps, from: at &- window, to: at)
+                in: tickTimestamps, from: subtracting(window, from: earlier.ts), to: earlier.ts)
+            let rateNow = tokenRate(
+                in: tickTimestamps, from: subtracting(window, from: at), to: at)
             guard let rateEarlier, let rateNow,
                 rateNow < rateEarlier * (1 - config.rateDropFraction),
-                at &- lastAnnotatedNs > window
+                at > adding(window, to: lastAnnotatedNs)
             else { continue }
             lastAnnotatedNs = at
             annotations.append(
@@ -138,7 +141,8 @@ public enum AnnotationEngine {
                     evidence: Annotation.Evidence(
                         sampleTimestamps: [earlier.ts, at],
                         eventTimestamps: cap(
-                            ticksBetween(tickTimestamps, earlier.ts &- window, at)),
+                            ticksBetween(
+                                tickTimestamps, subtracting(window, from: earlier.ts), at)),
                         values: [
                             "rateBeforePerSecond": rateEarlier,
                             "rateAfterPerSecond": rateNow,
@@ -181,7 +185,7 @@ public enum AnnotationEngine {
                     + "for its first token — \(String(format: "%.1f", Double(metric.ttftNs) / median))x the run median.",
                 evidence: Annotation.Evidence(
                     sampleTimestamps: [],
-                    eventTimestamps: [at, at + metric.ttftNs],
+                    eventTimestamps: [at, adding(metric.ttftNs, to: at)],
                     values: [
                         "ttftNs": Double(metric.ttftNs),
                         "medianTtftNs": median,
@@ -198,26 +202,32 @@ public enum AnnotationEngine {
         var annotations: [Annotation] = []
         for envelope in events {
             guard case .decodeTick(let tick) = envelope.payload,
+                let kvCacheBytes = tick.kvCacheBytes,
+                tick.memoryProvenance == .runtimeMeasuredKV
+                    || tick.memoryProvenance == .architectureModeledKV,
                 let requestId = envelope.requestId,
                 !annotatedRequests.contains(requestId),
                 let sampleIndex = nearestSampleIndex(in: samples, to: envelope.ts),
                 let process = samples[sampleIndex].process,
                 process.rssBytes > 0,
-                Double(tick.kvCacheBytes) > Double(process.rssBytes) * config.kvFraction
+                Double(kvCacheBytes) > Double(process.rssBytes) * config.kvFraction
             else { continue }
             annotatedRequests.insert(requestId)
+            let percentage = 100 * Double(kvCacheBytes) / Double(process.rssBytes)
+            let provenanceLabel =
+                tick.memoryProvenance == .runtimeMeasuredKV ? "Runtime-measured" : "Modeled"
             annotations.append(
                 Annotation(
                     kind: .kvDominatedFootprint,
                     atNs: envelope.ts,
                     message:
-                        "KV cache reached \(Int(100 * Double(tick.kvCacheBytes) / Double(process.rssBytes)))% "
+                        "\(provenanceLabel) KV cache reached \(String(format: "%.0f", percentage))% "
                         + "of process memory during \(requestId).",
                     evidence: Annotation.Evidence(
                         sampleTimestamps: [samples[sampleIndex].system.ts],
                         eventTimestamps: [envelope.ts],
                         values: [
-                            "kvCacheBytes": Double(tick.kvCacheBytes),
+                            "kvCacheBytes": Double(kvCacheBytes),
                             "processRSSBytes": Double(process.rssBytes),
                         ])))
         }
@@ -248,7 +258,11 @@ public enum AnnotationEngine {
             // sample per request goes quadratic on hour-long sessions.
             let start = SortedSearch.lowerBound(
                 samples, value: window.start, key: \.system.ts)
-            let end = SortedSearch.lowerBound(samples, value: window.end &+ 1, key: \.system.ts)
+            let end =
+                window.end == UInt64.max
+                ? samples.count
+                : SortedSearch.lowerBound(
+                    samples, value: window.end + 1, key: \.system.ts)
             guard start < end else { return nil }
             // Only samples that actually carry GPU data count: a session
             // without the daemon must not read as "0% busy".
@@ -307,8 +321,19 @@ public enum AnnotationEngine {
         Array(timestamps.prefix(evidenceCap))
     }
 
+    private static func subtracting(_ amount: UInt64, from value: UInt64) -> UInt64 {
+        value >= amount ? value - amount : 0
+    }
+
+    private static func adding(_ amount: UInt64, to value: UInt64) -> UInt64 {
+        value <= UInt64.max - amount ? value + amount : UInt64.max
+    }
+
     private static func dropPercent(before: Double, after: Double) -> Int {
-        Int(((before - after) / before * 100).rounded())
+        guard before > 0 else { return 0 }
+        let percentage = ((before - after) / before * 100).rounded()
+        guard percentage.isFinite else { return 0 }
+        return Int(max(0, min(100, percentage)))
     }
 
     /// Same formatter convention as every display site (Format.swift).

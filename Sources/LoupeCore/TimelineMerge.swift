@@ -1,5 +1,5 @@
 /// Clock-offset application for the correlated timeline: adapter event
-/// timestamps map onto the daemon's sample clock before any lane renders.
+/// timestamps map onto the app's sample clock before any lane renders.
 /// Same-machine adapters emit degenerate clock_sync (offset 0), so this is
 /// invisible today and load-bearing the day a remote-clock adapter appears.
 public enum TimelineMerge {
@@ -17,10 +17,10 @@ public enum TimelineMerge {
     /// around UInt64 — clamp to the clock's bounds instead.
     public static func shifted(_ ts: UInt64, byRemovingOffset offset: Int64) -> UInt64 {
         if offset >= 0 {
-            let magnitude = UInt64(offset)
+            let magnitude = offset.magnitude
             return ts >= magnitude ? ts - magnitude : 0
         }
-        let magnitude = UInt64(-offset)
+        let magnitude = offset.magnitude
         return ts <= UInt64.max - magnitude ? ts + magnitude : UInt64.max
     }
 }

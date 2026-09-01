@@ -46,16 +46,22 @@ public struct DaemonView: View {
                         .font(.callout)
                         .foregroundStyle(.red)
                 }
+                if let blocker = model.installationBlocker {
+                    Label(blocker, systemImage: "lock.shield")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 HStack {
                     Button("Install…") { model.install() }
-                        .disabled(model.status == .enabled)
+                        .disabled(model.status == .enabled || model.installationBlocker != nil)
                     Button("Uninstall") { Task { await model.uninstall() } }
                         .disabled(model.status == .notRegistered)
                     Spacer()
                     Button("Refresh") { model.refresh() }
                 }
             } header: {
-                Text("Privileged Daemon")
+                Text("Optional Telemetry Helper")
             } footer: {
                 Text(
                     "The daemon reads GPU, ANE, and package power via IOReport. macOS asks "
@@ -66,7 +72,7 @@ public struct DaemonView: View {
                 Section("Live Telemetry") {
                     if let handshake = model.handshake {
                         LabeledContent(
-                            "Daemon",
+                            "Helper",
                             value:
                                 "v\(handshake.daemonVersion) · protocol v\(handshake.protocolVersion) · pid \(handshake.pid)"
                         )

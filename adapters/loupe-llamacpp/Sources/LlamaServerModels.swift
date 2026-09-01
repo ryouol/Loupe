@@ -67,11 +67,20 @@ public struct KVCacheModel: Sendable, Equatable {
 
     /// K and V each store layers × kvHeads × headDim per token.
     public var bytesPerToken: Int {
-        2 * layers * kvHeads * headDimension * bytesPerElement
+        var value = 2
+        for factor in [layers, kvHeads, headDimension, bytesPerElement] {
+            guard factor > 0 else { return 0 }
+            let product = value.multipliedReportingOverflow(by: factor)
+            if product.overflow { return Int.max }
+            value = product.partialValue
+        }
+        return value
     }
 
     public func bytes(forTokens tokens: Int) -> UInt64 {
-        UInt64(max(0, tokens) * bytesPerToken)
+        guard tokens > 0, bytesPerToken > 0 else { return 0 }
+        let product = UInt64(tokens).multipliedReportingOverflow(by: UInt64(bytesPerToken))
+        return product.overflow ? UInt64.max : product.partialValue
     }
 }
 
@@ -85,7 +94,8 @@ public enum PrometheusParser {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
             guard !line.isEmpty, !line.hasPrefix("#") else { continue }
             let parts = line.split(separator: " ", omittingEmptySubsequences: true)
-            guard parts.count >= 2, let value = Double(parts[parts.count - 1]) else { continue }
+            guard parts.count >= 2, let value = Double(parts[parts.count - 1]), value.isFinite
+            else { continue }
             var name = String(parts[0])
             if let brace = name.firstIndex(of: "{") {
                 name = String(name[..<brace])

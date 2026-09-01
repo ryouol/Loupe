@@ -8,7 +8,6 @@ import os
 import time
 
 import pytest
-
 from loupe_mlx.events import decode_line
 
 mlx_lm = pytest.importorskip("mlx_lm")
@@ -29,7 +28,7 @@ def instrumented_run() -> tuple[list, int]:
     for _ in loupe.stream_generate(model, tokenizer, PROMPT, max_tokens=48):
         produced += 1
     loupe.close()
-    server.wait_for(produced + 6)
+    server.wait_for(produced + 7)
     return [decode_line(line) for line in server.lines], produced
 
 
@@ -43,12 +42,14 @@ def test_event_ordering(instrumented_run) -> None:
     assert kinds[3] == "model_load_end"
     assert kinds[4] == "request_start"
     assert kinds[5] == "prefill_end"
-    assert kinds[-1] == "request_end"
-    assert kinds[6:-1] == ["decode_tick"] * produced
+    assert kinds[-2:] == ["request_end", "transport_summary"]
+    assert kinds[6:-2] == ["decode_tick"] * produced
 
     ticks = [envelope for envelope in events if envelope.event == "decode_tick"]
     assert [tick.payload.output_tokens for tick in ticks] == list(range(1, produced + 1))
-    assert all(tick.request_id == "q-1" for tick in ticks)
+    request_start = next(envelope for envelope in events if envelope.event == "request_start")
+    assert request_start.request_id.startswith("q-")
+    assert all(tick.request_id == request_start.request_id for tick in ticks)
 
 
 def test_timestamps_are_monotonic(instrumented_run) -> None:
@@ -58,13 +59,13 @@ def test_timestamps_are_monotonic(instrumented_run) -> None:
     assert all(ts > 0 for ts in timestamps)
 
 
-def test_ttft_is_prefill_end_minus_request_start(instrumented_run) -> None:
+def test_ttft_is_first_output_minus_request_start(instrumented_run) -> None:
     events, _ = instrumented_run
     request_start = next(e for e in events if e.event == "request_start")
     prefill_end = next(e for e in events if e.event == "prefill_end")
     first_tick = next(e for e in events if e.event == "decode_tick")
 
-    ttft_ns = prefill_end.ts - request_start.ts
+    ttft_ns = first_tick.ts - request_start.ts
     assert ttft_ns > 0
     assert ttft_ns < 60_000_000_000, "TTFT beyond a minute means broken timestamps"
     # The first token can only exist after prefill finished.
@@ -78,13 +79,16 @@ def test_memory_counters_are_plausible(instrumented_run) -> None:
     assert load_end.payload.weights_bytes > 50_000_000, "0.5B weights are >50MB"
 
     ticks = [e for e in events if e.event == "decode_tick"]
-    assert all(t.payload.active_memory_bytes >= t.payload.kv_cache_bytes for t in ticks)
-    # kv_cache_bytes is an active-memory-growth proxy: the physical KV cache
-    # grows monotonically but MLX's allocator frees interleaved buffers, so
-    # only the trend is guaranteed — some growth, never negative.
-    kv_sizes = [t.payload.kv_cache_bytes for t in ticks]
-    assert all(kv >= 0 for kv in kv_sizes)
-    assert max(kv_sizes) > 0, "decode should allocate KV-attributable memory"
+    assert all(t.payload.kv_cache_bytes is None for t in ticks)
+    assert all(t.payload.memory_provenance.value == "allocator_delta_proxy" for t in ticks)
+    # Allocator growth includes KV plus transient/interleaved buffers. It is
+    # useful memory evidence, but it is deliberately not labeled KV.
+    growth = [t.payload.allocator_memory_growth_bytes for t in ticks]
+    assert all(value is not None and value >= 0 for value in growth)
+    assert all(
+        t.payload.active_memory_bytes >= value for t, value in zip(ticks, growth, strict=True)
+    )
+    assert max(growth) > 0, "decode should produce observable allocator growth"
 
 
 @pytest.mark.skipif(

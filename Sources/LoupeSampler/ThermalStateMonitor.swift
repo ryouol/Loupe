@@ -1,20 +1,18 @@
 import Foundation
 import LoupeCore
+import LoupeTelemetry
 
-/// Push-based thermal state changes (vs. the sampler's polled reads): the
-/// cooldown gate between benchmark runs waits on these instead of spinning.
+/// Periodic thermal observations for the benchmark cooldown dwell gate.
 public enum ThermalStateMonitor {
-    /// Current state first, then every change until cancelled.
+    /// Current state first, then a bounded 4 Hz stream until cancelled.
     public static func states() -> AsyncStream<ThermalState> {
-        AsyncStream { continuation in
-            continuation.yield(ThermalState(platform: ProcessInfo.processInfo.thermalState))
+        AsyncStream(bufferingPolicy: .bufferingNewest(16)) { continuation in
             let task = Task {
-                let notifications = NotificationCenter.default.notifications(
-                    named: ProcessInfo.thermalStateDidChangeNotification)
-                for await _ in notifications {
-                    if Task.isCancelled { break }
-                    continuation.yield(
+                while !Task.isCancelled {
+                    let result = continuation.yield(
                         ThermalState(platform: ProcessInfo.processInfo.thermalState))
+                    if case .terminated = result { break }
+                    try? await Task.sleep(for: .milliseconds(250))
                 }
                 continuation.finish()
             }

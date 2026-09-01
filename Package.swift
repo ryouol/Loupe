@@ -9,6 +9,7 @@ let package = Package(
     platforms: [.macOS(.v15)],
     products: [
         .library(name: "LoupeCore", targets: ["LoupeCore"]),
+        .library(name: "LoupeTelemetry", targets: ["LoupeTelemetry"]),
         .library(name: "LoupeStore", targets: ["LoupeStore"]),
         .library(name: "LoupeSampler", targets: ["LoupeSampler"]),
         .library(name: "LoupeBench", targets: ["LoupeBench"]),
@@ -27,10 +28,20 @@ let package = Package(
             name: "LoupeStore",
             dependencies: [
                 "LoupeCore",
+                "LoupeSampler",
+                "LoupeTelemetry",
                 .product(name: "GRDB", package: "GRDB.swift"),
             ]
         ),
-        .target(name: "LoupeSampler", dependencies: ["LoupeCore"]),
+        .target(
+            name: "LoupeTelemetry",
+            dependencies: ["LoupeCore"],
+            linkerSettings: [.linkedFramework("Security")]
+        ),
+        .target(
+            name: "LoupeSampler",
+            dependencies: ["LoupeCore", "LoupeTelemetry"]
+        ),
         .target(
             name: "LoupeBench",
             dependencies: [
@@ -40,15 +51,17 @@ let package = Package(
         ),
         .target(
             name: "LoupeApp",
-            dependencies: ["LoupeCore", "LoupeStore", "LoupeSampler", "LoupeBench"]
+            dependencies: [
+                "LoupeCore", "LoupeStore", "LoupeSampler", "LoupeTelemetry", "LoupeBench",
+            ]
         ),
         .executableTarget(
             name: "loupedaemon",
-            dependencies: ["LoupeCore", "LoupeSampler", "LoupeStore"]
+            dependencies: ["LoupeCore", "LoupeTelemetry"]
         ),
         .executableTarget(
             name: "loupe-record",
-            dependencies: ["LoupeCore", "LoupeSampler"]
+            dependencies: ["LoupeCore", "LoupeTelemetry"]
         ),
         .executableTarget(
             name: "loupe-bench",
@@ -70,9 +83,14 @@ let package = Package(
             path: "adapters/loupe-llamacpp/Tests"
         ),
         .testTarget(name: "LoupeCoreTests", dependencies: ["LoupeCore"]),
-        .testTarget(name: "LoupeBenchTests", dependencies: ["LoupeBench"]),
-        .testTarget(name: "LoupeStoreTests", dependencies: ["LoupeStore"]),
-        .testTarget(name: "LoupeSamplerTests", dependencies: ["LoupeSampler"]),
+        .testTarget(
+            name: "LoupeBenchTests", dependencies: ["LoupeBench"],
+            exclude: ["golden-report.json"]
+        ),
+        .testTarget(
+            name: "LoupeStoreTests", dependencies: ["LoupeStore", "LoupeTelemetry"]),
+        .testTarget(
+            name: "LoupeSamplerTests", dependencies: ["LoupeSampler", "LoupeTelemetry"]),
         .testTarget(name: "LoupeAppTests", dependencies: ["LoupeApp"]),
     ]
 )

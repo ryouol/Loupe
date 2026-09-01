@@ -4,19 +4,20 @@ import json
 
 import pytest
 from jsonschema import Draft202012Validator
-
 from loupe_mlx.events import (
     REQUEST_SCOPED_EVENTS,
     ClockSync,
     DecodeTick,
     Envelope,
     ErrorEvent,
+    MemoryMetricProvenance,
     ModelLoadEnd,
     ModelLoadStart,
     PrefillEnd,
     RequestEnd,
     RequestStart,
     SessionStart,
+    TransportSummary,
     encode_line,
 )
 
@@ -54,8 +55,15 @@ ENCODABLE_PAYLOADS = [
     RequestStart(prompt_tokens=7),
     RequestStart(),
     PrefillEnd(prompt_tokens=7),
-    DecodeTick(output_tokens=1, kv_cache_bytes=2, active_memory_bytes=3),
+    DecodeTick(
+        output_tokens=1,
+        kv_cache_bytes=2,
+        active_memory_bytes=3,
+        memory_provenance=MemoryMetricProvenance.RUNTIME_MEASURED_KV,
+    ),
     RequestEnd(output_tokens=9, finish_reason="stop"),
+    RequestEnd(output_tokens=1, finish_reason="stop", decode_duration_ns=10),
+    TransportSummary(attempted_events=10, producer_dropped_events=0),
     ErrorEvent(code="c", message="m"),
 ]
 

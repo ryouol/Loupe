@@ -1,12 +1,12 @@
 [project]
 name = "loupe-mlx"
-version = "0.1.0"
-description = "Instruments mlx-lm inference and streams events to the Loupe daemon."
+version = "0.2.0"
+description = "Instruments mlx-lm inference and streams events to the user-owned Loupe app."
 requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "jsonschema>=4.21"]
+dev = ["pytest>=8.0", "jsonschema>=4.21", "ruff==0.16.5"]
 mlx = ["mlx-lm>=0.24"]
 
 [build-system]
@@ -18,3 +18,10 @@ packages = ["src/loupe_mlx"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "B"]
