@@ -78,12 +78,26 @@ public struct ProcessSample: Codable, Sendable, Equatable {
 
 /// One telemetry row: both families aligned in time, never merged.
 public struct SystemSample: Codable, Sendable, Equatable {
+    /// Monotonic acquisition sequence for live protocol-v2 streams. Portable
+    /// v1 rows and third-party replay files omit it; absence means unknown,
+    /// never zero loss.
+    public let acquisitionSequence: UInt64?
     public let system: SystemWideSample
     public let process: ProcessSample?
 
-    public init(system: SystemWideSample, process: ProcessSample?) {
+    public init(
+        acquisitionSequence: UInt64? = nil,
+        system: SystemWideSample,
+        process: ProcessSample?
+    ) {
+        self.acquisitionSequence = acquisitionSequence
         self.system = system
         self.process = process
+    }
+
+    public func withAcquisitionSequence(_ sequence: UInt64?) -> SystemSample {
+        SystemSample(
+            acquisitionSequence: sequence, system: system, process: process)
     }
 }
 
@@ -92,6 +106,7 @@ public struct SystemSample: Codable, Sendable, Equatable {
 /// the values can describe a real sample and are safe to graph.
 public enum SystemSampleValidation {
     public static func accepts(_ sample: SystemSample) -> Bool {
+        guard sample.acquisitionSequence.map({ $0 > 0 }) ?? true else { return false }
         let system = sample.system
         guard validPercentage(system.gpuBusyPercent),
             validNonnegative(system.gpuPowerMilliwatts),
@@ -122,7 +137,7 @@ public enum SystemSampleWireDecoder {
     public static func decode(_ data: Data) -> SystemSample? {
         guard data.count <= maxLineBytes,
             let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            Set(root.keys).isSubset(of: ["system", "process"]),
+            Set(root.keys).isSubset(of: ["acquisitionSequence", "system", "process"]),
             let system = root["system"] as? [String: Any],
             Set(system.keys).isSubset(of: [
                 "ts", "thermalState", "memoryUsedBytes", "memoryFreeBytes", "swapUsedBytes",

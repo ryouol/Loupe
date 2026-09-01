@@ -3,7 +3,7 @@ import Foundation
 import LoupeCore
 import LoupeLlamaCpp
 
-// Drives llama-server completions and streams protocol-v1 events to the
+// Drives llama-server completions and streams protocol-v2 events to the
 // Loupe app. The server is observed from outside: per-request truth from
 // /completion timings, gauges from /metrics at 10 Hz, PID resolved from the
 // listening socket so the app can attach per-process telemetry.
@@ -99,11 +99,30 @@ let timebase = Timebase.live()
 let writer = UnixSocketLineWriter(socketPath: socketPath)
 let encoder = EventLineEncoder()
 let httpSession = AdapterHTTP.session()
+var sequence: UInt64 = 0
 
+@MainActor
 func emit(_ envelope: EventEnvelope) {
-    if let line = try? encoder.encode(envelope) {
+    sequence += 1
+    let sequenced = EventEnvelope(
+        version: EventProtocol.version, sequence: sequence, ts: envelope.ts,
+        runId: envelope.runId, requestId: envelope.requestId, payload: envelope.payload)
+    if let line = try? encoder.encode(sequenced) {
         writer.send(line)
     }
+}
+
+@MainActor
+func finishWriter() {
+    let attempted = sequence
+    emit(
+        EventEnvelope(
+            ts: timebase.nowNanoseconds(), runId: runId, requestId: nil,
+            payload: .transportSummary(
+                TransportSummaryPayload(
+                    attemptedEvents: attempted,
+                    producerDroppedEvents: UInt64(max(0, writer.dropped))))))
+    writer.close()
 }
 
 do {
@@ -137,11 +156,15 @@ do {
     await poller.start()
 
     let startNs = timebase.nowNanoseconds()
+    // The same logical run may relaunch this adapter; a nonce prevents its
+    // one-request counter from colliding with evidence already persisted.
+    let requestID =
+        "q-\(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased())"
     let (chunks, arrivals) = try await streamCompletion(
         server: serverURL, prompt: prompt, maxTokens: maxTokens,
         timebase: timebase, session: httpSession)
     for envelope in LlamaRequestTrace.events(
-        runId: runId, requestId: "q-1", requestStartNs: startNs,
+        runId: runId, requestId: requestID, requestStartNs: startNs,
         chunkArrivalsNs: arrivals, chunks: chunks, kv: kvModel)
     {
         emit(envelope)
@@ -152,14 +175,14 @@ do {
         log("kv cache usage peaked at \(String(format: "%.1f", kvUsage * 100))%")
     }
     log("dropped socket lines: \(writer.dropped)")
-    writer.close()
+    finishWriter()
 } catch {
     emit(
         EventEnvelope(
             ts: timebase.nowNanoseconds(), runId: runId, requestId: nil,
             payload: .error(
                 ErrorPayload(code: "adapter_failed", message: evidenceErrorMessage(error)))))
-    writer.close()
+    finishWriter()
     fail("loupe-llamacpp failed: \(error)")
 }
 

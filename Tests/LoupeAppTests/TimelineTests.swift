@@ -27,6 +27,24 @@ final class TimelineGeometryTests: XCTestCase {
         XCTAssertEqual(TimelineGeometry.nearestIndex(in: seconds, to: 99), 4)
         XCTAssertNil(TimelineGeometry.nearestIndex(in: [], to: 1))
     }
+
+    func testRequestSpanSurvivesWhenThroughputIntervalIsUnavailable() {
+        let milestones = [
+            ReplayViewModel.Milestone(
+                id: 0, offsetSeconds: 1, kind: .requestStart,
+                requestId: "q", detail: "started"),
+            ReplayViewModel.Milestone(
+                id: 1, offsetSeconds: 2, kind: .prefillEnd,
+                requestId: "q", detail: "prefill"),
+            ReplayViewModel.Milestone(
+                id: 2, offsetSeconds: 3, kind: .requestEnd,
+                requestId: "q", detail: "ended"),
+        ]
+        let spans = TimelineGeometry.requestSpans(milestones: milestones)
+        XCTAssertEqual(spans.count, 1)
+        XCTAssertEqual(spans.first?.id, "q")
+        XCTAssertEqual(spans.first?.prefillEndSeconds, 2)
+    }
 }
 
 @MainActor
@@ -70,6 +88,8 @@ final class TimelineAlignmentTests: XCTestCase {
             XCTAssertEqual(readout.seconds, point.seconds)
             XCTAssertEqual(readout.systemUsedGB, point.systemUsedGB)
             XCTAssertEqual(readout.processRSSGB, point.processRSSGB)
+            XCTAssertEqual(readout.processCPUPercent, point.processCPUPercent)
+            XCTAssertEqual(readout.packagePowerWatts, point.packagePowerWatts)
             // …and the active request agrees with the swimlane geometry.
             let span = TimelineGeometry.activeSpan(in: model.requestSpans, at: target)
             XCTAssertEqual(readout.activeRequestId, span?.id)
@@ -83,6 +103,51 @@ final class TimelineAlignmentTests: XCTestCase {
         // Endpoints survive downsampling, and no lane extends past duration.
         XCTAssertLessThanOrEqual(
             model.chartPoints.last?.seconds ?? 0, model.durationSeconds + 0.0001)
+    }
+
+    func testDownsampleUnionPreservesSpikesFromEveryDisplayedMetric() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("loupe-metric-union-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let base = directory.appendingPathComponent("spikes").path
+        let spikeIndices = [211, 433, 655, 877, 1_099, 1_321, 1_543]
+        let encoder = JSONEncoder.deterministic()
+        let rows = try (0..<3_000).map { index -> String in
+            let sample = SystemSample(
+                system: SystemWideSample(
+                    ts: UInt64(index + 1) * 1_000_000,
+                    thermalState: .nominal,
+                    memoryUsedBytes: UInt64(index == spikeIndices[0] ? 9_000_000_000 : 1_000),
+                    memoryFreeBytes: 1_000,
+                    swapUsedBytes: UInt64(index == spikeIndices[1] ? 8_000_000_000 : 0),
+                    gpuBusyPercent: index == spikeIndices[4] ? 100 : 1,
+                    gpuPowerMilliwatts: index == spikeIndices[5] ? 90_000 : 1_000,
+                    packagePowerMilliwatts: index == spikeIndices[6] ? 120_000 : 2_000),
+                process: ProcessSample(
+                    ts: UInt64(index + 1) * 1_000_000, pid: 9,
+                    cpuPercent: index == spikeIndices[3] ? 800 : 1,
+                    rssBytes: UInt64(index == spikeIndices[2] ? 7_000_000_000 : 500)))
+            return String(decoding: try encoder.encode(sample), as: UTF8.self)
+        }
+        try rows.joined(separator: "\n").write(
+            toFile: base + SessionFilePair.systemSuffix, atomically: true, encoding: .utf8)
+        try
+            #"{"v":1,"ts":1000000,"runId":"r","event":"session_start","payload":{"adapter":"a","adapterVersion":"1","runtime":"mlx","pid":9}}"#
+            .write(
+                toFile: base + SessionFilePair.eventsSuffix, atomically: true,
+                encoding: .utf8)
+
+        let model = ReplayViewModel(basePath: base)
+        await model.load()
+        XCTAssertTrue(model.isLoaded, model.loadFailure ?? "load failed")
+        XCTAssertLessThanOrEqual(model.chartPoints.count, 2_000)
+        let retained = Set(model.chartPoints.map(\.id))
+        for spike in spikeIndices {
+            XCTAssertTrue(retained.contains(spike), "metric spike \(spike) was erased")
+        }
+        XCTAssertTrue(model.processCPUAccessibilitySummary.contains("percent CPU"))
+        XCTAssertTrue(model.powerAccessibilitySummary.contains("watts"))
     }
 
     /// Charts, swimlanes, and annotations must share one time zero — two

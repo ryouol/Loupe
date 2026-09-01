@@ -39,7 +39,7 @@ terms and configuration.
 ## Sharing
 
 Loupe does not sell or share session data. If you manually send an evidence
-file, benchmark report, or session pair to another person or service, that
+file, benchmark report, or portable session bundle to another person or service, that
 recipient's practices apply.
 
 ## Contact and release gate

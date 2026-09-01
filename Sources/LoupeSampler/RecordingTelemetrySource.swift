@@ -1,5 +1,53 @@
+import Foundation
 import LoupeCore
 import LoupeTelemetry
+
+private final class RecordingTelemetryCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var outputDrops = 0
+    private var outputComplete = false
+    private var local: TelemetryAcquisitionStats?
+    private var helper: TelemetryAcquisitionStats?
+
+    func record<T>(_ result: AsyncStream<T>.Continuation.YieldResult) {
+        if case .dropped = result {
+            lock.withLock { if outputDrops < Int.max { outputDrops += 1 } }
+        }
+    }
+
+    func setLocal(_ value: TelemetryAcquisitionStats) {
+        lock.withLock { local = value }
+    }
+
+    func setHelper(_ value: TelemetryAcquisitionStats) {
+        lock.withLock { helper = value }
+    }
+
+    func markComplete() {
+        lock.withLock { outputComplete = true }
+    }
+
+    func snapshot() -> TelemetryAcquisitionStats {
+        lock.withLock {
+            let localStats = local ?? .unknown
+            let helperStats = helper ?? .unknown
+            let helperContributed = helperStats.sourceWasActive
+            let knownLosses = Self.adding(
+                Self.adding(localStats.lowerBound, helperContributed ? helperStats.lowerBound : 0),
+                outputDrops)
+            return TelemetryAcquisitionStats(
+                droppedSamples: knownLosses,
+                malformedSamples: 0,
+                complete: outputComplete && localStats.complete
+                    && (!helperContributed || helperStats.complete),
+                sourceWasActive: true)
+        }
+    }
+
+    private static func adding(_ lhs: Int, _ rhs: Int) -> Int {
+        lhs > Int.max - rhs ? Int.max : lhs + rhs
+    }
+}
 
 /// Latest privileged power fields, isolated from the local sampling loop.
 private actor PrivilegedPowerCache {
@@ -23,6 +71,7 @@ private actor PrivilegedPowerCache {
 public actor RecordingTelemetrySource: TelemetrySource {
     private let targetPID: Int32?
     private let intervalMs: Int
+    private let counter = RecordingTelemetryCounter()
 
     public init(
         targetPID: Int32?, intervalMs: Int = Sampling.defaultIntervalMs
@@ -35,6 +84,7 @@ public actor RecordingTelemetrySource: TelemetrySource {
     public func stream() -> AsyncStream<SystemSample> {
         let pid = targetPID
         let interval = intervalMs
+        let counter = counter
         return AsyncStream(bufferingPolicy: .bufferingNewest(64)) { continuation in
             let task = Task {
                 let powerCache = PrivilegedPowerCache()
@@ -50,10 +100,13 @@ public actor RecordingTelemetrySource: TelemetrySource {
                     }
                     daemon.startStream(intervalMs: interval)
                     for await sample in privilegedStream {
-                        guard !Task.isCancelled else { break }
+                        // Preserve a row already accepted from XPC; the next
+                        // iterator step observes cancellation.
                         await powerCache.update(sample.system)
                     }
-                    daemon.stopAndInvalidate()
+                    await daemon.requestStop()
+                    counter.setHelper(daemon.acquisitionStats())
+                    daemon.invalidate()
                 }
 
                 let local = LiveTelemetrySource(
@@ -61,21 +114,26 @@ public actor RecordingTelemetrySource: TelemetrySource {
                     cadence: Sampling.clampedCadence(intervalMs: interval),
                     makePowerReader: { IOReportPowerReader() })
                 for await sample in await local.stream() {
-                    guard !Task.isCancelled else { break }
                     let privileged = await powerCache.latest()
-                    continuation.yield(
-                        Self.merging(
-                            local: sample, privileged: privileged,
-                            maximumSkewNs: UInt64(interval) * 3_000_000))
+                    counter.record(
+                        continuation.yield(
+                            Self.merging(
+                                local: sample, privileged: privileged,
+                                maximumSkewNs: UInt64(interval) * 3_000_000)))
                 }
 
                 privilegedTask.cancel()
-                daemon.stopAndInvalidate()
                 await privilegedTask.value
+                counter.setLocal(await local.acquisitionStats())
+                counter.markComplete()
                 continuation.finish()
             }
             continuation.onTermination = { _ in task.cancel() }
         }
+    }
+
+    public func acquisitionStats() -> TelemetryAcquisitionStats {
+        counter.snapshot()
     }
 
     static func merging(
@@ -87,6 +145,7 @@ public actor RecordingTelemetrySource: TelemetrySource {
         let skew = max(system.ts, privileged.ts) - min(system.ts, privileged.ts)
         guard skew <= maximumSkewNs else { return local }
         return SystemSample(
+            acquisitionSequence: local.acquisitionSequence,
             system: SystemWideSample(
                 ts: system.ts,
                 thermalState: system.thermalState,

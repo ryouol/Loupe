@@ -28,7 +28,7 @@ def instrumented_run() -> tuple[list, int]:
     for _ in loupe.stream_generate(model, tokenizer, PROMPT, max_tokens=48):
         produced += 1
     loupe.close()
-    server.wait_for(produced + 6)
+    server.wait_for(produced + 7)
     return [decode_line(line) for line in server.lines], produced
 
 
@@ -42,12 +42,14 @@ def test_event_ordering(instrumented_run) -> None:
     assert kinds[3] == "model_load_end"
     assert kinds[4] == "request_start"
     assert kinds[5] == "prefill_end"
-    assert kinds[-1] == "request_end"
-    assert kinds[6:-1] == ["decode_tick"] * produced
+    assert kinds[-2:] == ["request_end", "transport_summary"]
+    assert kinds[6:-2] == ["decode_tick"] * produced
 
     ticks = [envelope for envelope in events if envelope.event == "decode_tick"]
     assert [tick.payload.output_tokens for tick in ticks] == list(range(1, produced + 1))
-    assert all(tick.request_id == "q-1" for tick in ticks)
+    request_start = next(envelope for envelope in events if envelope.event == "request_start")
+    assert request_start.request_id.startswith("q-")
+    assert all(tick.request_id == request_start.request_id for tick in ticks)
 
 
 def test_timestamps_are_monotonic(instrumented_run) -> None:

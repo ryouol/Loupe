@@ -5,6 +5,28 @@ import XCTest
 @testable import LoupeSampler
 @testable import LoupeTelemetry
 
+private actor DuplicateSequenceTelemetrySource: TelemetrySource {
+    func stream() -> AsyncStream<SystemSample> {
+        AsyncStream { continuation in
+            for timestamp in [1, 2] {
+                continuation.yield(
+                    SystemSample(
+                        acquisitionSequence: 1,
+                        system: SystemWideSample(
+                            ts: UInt64(timestamp), thermalState: .nominal,
+                            memoryUsedBytes: 1, memoryFreeBytes: 1,
+                            swapUsedBytes: 0),
+                        process: nil))
+            }
+            continuation.finish()
+        }
+    }
+
+    func acquisitionStats() -> TelemetryAcquisitionStats {
+        TelemetryAcquisitionStats(complete: true)
+    }
+}
+
 /// Drives the real NSXPC machinery in-process through an anonymous listener:
 /// no mach service registration, no SMAppService, no root. What this cannot
 /// cover — actual launchd registration and reboot survival — is scripted in
@@ -124,5 +146,56 @@ final class DaemonXPCTests: XCTestCase {
         }
         // Reaching here at all is the assertion: the for-await terminated.
         XCTAssertGreaterThanOrEqual(count, 1)
+    }
+
+    func testReceiverBackpressureAndTerminalSummaryAreCounted() async {
+        let (client, listener, delegate) = makeConnectedClient()
+        defer {
+            client.invalidate()
+            listener.invalidate()
+            _ = delegate
+        }
+        _ = client.activate(bufferLimit: 1)
+        let handshake = await client.handshake()
+        XCTAssertNotNil(handshake)
+        client.startStream(intervalMs: Sampling.minIntervalMs)
+        try? await Task.sleep(for: .milliseconds(100))
+        await client.requestStop()
+
+        for _ in 0..<100 {
+            if client.acquisitionStats().complete { break }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        let stats = client.acquisitionStats()
+        XCTAssertTrue(stats.complete, "daemon terminal summary must close the window")
+        XCTAssertGreaterThan(stats.droppedSamples, 0)
+        XCTAssertGreaterThan(stats.lowerBound, 0)
+    }
+
+    func testReceiverRejectsNonmonotonicTelemetrySequence() async {
+        let listener = NSXPCListener.anonymous()
+        let delegate = DaemonListenerDelegate(
+            daemonVersion: "test", peerValidator: .currentProcessForTesting
+        ) { _ in DuplicateSequenceTelemetrySource() }
+        listener.delegate = delegate
+        listener.resume()
+        defer {
+            listener.invalidate()
+            _ = delegate
+        }
+
+        let client = DaemonXPCClient(endpoint: .anonymous(listener.endpoint))
+        _ = client.activate()
+        let handshake = await client.handshake()
+        XCTAssertNotNil(handshake)
+        client.startStream(intervalMs: 20)
+        try? await Task.sleep(for: .milliseconds(50))
+        await client.requestStop()
+
+        let stats = client.acquisitionStats()
+        XCTAssertTrue(stats.complete)
+        XCTAssertEqual(stats.malformedSamples, 1)
+        XCTAssertEqual(stats.lowerBound, 1)
+        client.invalidate()
     }
 }

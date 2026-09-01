@@ -60,7 +60,7 @@ public struct SessionHistoryView: View {
             }
         } message: {
             Text(
-                "The database, history manifest, and portable evidence pair will be removed from this Mac."
+                "The database, history manifest, portable evidence pair, and acquisition metadata will be removed from this Mac."
             )
         }
     }
@@ -82,6 +82,10 @@ public struct SessionHistoryView: View {
                 Text("\(session.eventCount) events · \(session.sampleCount) samples")
                     .font(.callout)
                     .monospacedDigit()
+                Text("Acquisition loss: \(acquisitionLoss(session))")
+                    .font(.caption)
+                    .foregroundStyle(
+                        acquisitionLoss(session) == "0" ? Color.secondary : Color.orange)
                 Text(session.statusDetail)
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -119,5 +123,20 @@ public struct SessionHistoryView: View {
         }
         .padding(.vertical, 8)
         .accessibilityElement(children: .contain)
+    }
+
+    private func acquisitionLoss(_ session: SessionSummary) -> String {
+        guard let metadata = session.acquisitionMetadata else { return "unknown" }
+        if let events = metadata.eventLosses.exact,
+            let telemetry = metadata.telemetryLosses.exact
+        {
+            return String(events > Int.max - telemetry ? Int.max : events + telemetry)
+        }
+        let lower =
+            metadata.eventLosses.lowerBound > Int.max
+                - metadata.telemetryLosses.lowerBound
+            ? Int.max
+            : metadata.eventLosses.lowerBound + metadata.telemetryLosses.lowerBound
+        return lower == 0 ? "unknown" : "≥\(lower) · unknown total"
     }
 }

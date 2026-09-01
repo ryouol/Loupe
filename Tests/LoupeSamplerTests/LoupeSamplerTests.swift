@@ -44,9 +44,10 @@ final class ReplaySourceTests: XCTestCase {
         return url
     }
 
-    private func sampleLine(ts: UInt64, rss: UInt64) -> String {
+    private func sampleLine(ts: UInt64, rss: UInt64, sequence: UInt64? = nil) -> String {
+        let sequenceField = sequence.map { #""acquisitionSequence":\#($0),"# } ?? ""
         """
-        {"system":{"ts":\(ts),"thermalState":"nominal","memoryUsedBytes":1024,\
+        {\(sequenceField)"system":{"ts":\(ts),"thermalState":"nominal","memoryUsedBytes":1024,\
         "memoryFreeBytes":2048,"swapUsedBytes":0},\
         "process":{"ts":\(ts),"pid":42,"cpuPercent":12.5,"rssBytes":\(rss)}}
         """
@@ -80,6 +81,22 @@ final class ReplaySourceTests: XCTestCase {
         var count = 0
         for await _ in await source.stream() { count += 1 }
         XCTAssertEqual(count, 2)
+        let dropped = await source.droppedLines
+        XCTAssertEqual(dropped, 1)
+    }
+
+    func testReplayTelemetryDropsNonmonotonicAcquisitionSequence() async throws {
+        let url = try temporaryFile(lines: [
+            sampleLine(ts: 100, rss: 1, sequence: 1),
+            sampleLine(ts: 150, rss: 2, sequence: 1),
+            sampleLine(ts: 200, rss: 3, sequence: 3),
+        ])
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let source = ReplayTelemetrySource(fileURL: url)
+        var collected: [SystemSample] = []
+        for await sample in await source.stream() { collected.append(sample) }
+        XCTAssertEqual(collected.map(\.acquisitionSequence), [1, 3])
         let dropped = await source.droppedLines
         XCTAssertEqual(dropped, 1)
     }
@@ -262,6 +279,25 @@ final class LiveTelemetrySourceTests: XCTestCase {
             XCTAssertGreaterThan(sample.system.memoryUsedBytes, 0)
             break
         }
+    }
+
+    func testForcedBackpressureIsCountedAndSequenced() async {
+        let source = LiveTelemetrySource(
+            targetPID: nil, cadence: .milliseconds(1), bufferLimit: 1)
+
+        func letProducerRunAhead() async -> SystemSample? {
+            let stream = await source.stream()
+            try? await Task.sleep(for: .milliseconds(40))
+            var iterator = stream.makeAsyncIterator()
+            return await iterator.next()
+        }
+
+        let retained = await letProducerRunAhead()
+        try? await Task.sleep(for: .milliseconds(20))
+        let stats = await source.acquisitionStats()
+        XCTAssertGreaterThan(retained?.acquisitionSequence ?? 0, 1)
+        XCTAssertGreaterThan(stats.droppedSamples, 0)
+        XCTAssertGreaterThan(stats.lowerBound, 0)
     }
 }
 

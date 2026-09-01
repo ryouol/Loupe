@@ -10,6 +10,12 @@ connect a same-user MLX or llama.cpp adapter, recover durable session history,
 open a bundled sanitized sample without a model or API key, and export hashed
 JSON/CSV evidence.
 
+Analysis keeps process CPU and RSS, GPU utilization, GPU power, package power,
+memory, and swap in unit-correct lanes. Missing channels stay hidden. Recording
+loss and replay-file corruption are shown separately: an exact count requires a
+closed producer accounting window, while legacy or interrupted sessions show
+`unknown` (with an observed lower bound when available), never an invented zero.
+
 ## Try it without setup
 
 Build and launch the app, then choose **Open sample session**. The sample is
@@ -39,6 +45,11 @@ both dependency lockfiles before any artifact can be packaged.
    it validates `session_start` and verifies the observed PID belongs to the
    logged-in user.
 4. Stop the recording and open it from **History**.
+
+A completed protocol-v2 recording has runtime-event and telemetry NDJSON files
+plus an acquisition-metadata JSON sidecar. JSON and CSV evidence identify and
+SHA-256 hash every present source, and carry the same counts, duration, thermal
+states, replay-parser drops, and acquisition-loss summary.
 
 The root helper is optional. Local mode records memory, thermal state, and
 per-process CPU/RSS; a correctly signed and approved helper can add privileged

@@ -57,6 +57,14 @@ func writeOwnerOnlyAtomically(_ data: Data, to destination: URL) throws {
     guard rename(temporary.path, destination.path) == 0 else {
         throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
     }
+    let directoryDescriptor = open(directory.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+    guard directoryDescriptor >= 0 else {
+        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+    }
+    defer { close(directoryDescriptor) }
+    guard fsync(directoryDescriptor) == 0 else {
+        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+    }
 }
 
 var specPath: String?
@@ -165,7 +173,7 @@ func runOnce(contextTokens: Int, seed: UInt64, runIndex: Int) throws -> [EventEn
     }
     var sequence = EventStreamValidator()
     guard envelopes.allSatisfy({ sequence.accepts($0) }), sequence.hasStartedSession,
-        !sequence.hasOpenRequests
+        !sequence.hasOpenRequests, sequence.hasTerminalSummary
     else {
         throw NSError(
             domain: "loupe-bench", code: 6,

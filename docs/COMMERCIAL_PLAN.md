@@ -74,7 +74,8 @@ Validation sequence:
 3. Scrub across prefill and decode while reading process RSS, swap, GPU, and
    thermal values from the shared cursor.
 4. Open one finding and show its exact sample/event evidence.
-5. Export JSON evidence and point to both source SHA-256 values.
+5. Export JSON evidence and point to every present event, telemetry, and
+   acquisition-metadata source SHA-256.
 6. Open two deliberately mismatched benchmark reports and show that Loupe
    suppresses every delta.
 7. End on **Record**, showing the two environment values for a real adapter.

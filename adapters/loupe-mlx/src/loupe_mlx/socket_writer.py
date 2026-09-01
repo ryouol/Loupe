@@ -15,10 +15,16 @@ import socket
 import stat
 import threading
 import time
+from collections.abc import Callable
 
 from .events import Envelope, encode_line
 
 _CLOSE = object()
+
+
+class _Terminal:
+    def __init__(self, make_envelope: Callable[[int], Envelope]) -> None:
+        self.make_envelope = make_envelope
 
 
 class FileEventWriter:
@@ -63,9 +69,20 @@ class FileEventWriter:
         self._fh.close()
         self.connected = False
 
+    def finish(self, make_terminal: Callable[[int], Envelope], timeout: float = 0.0) -> None:
+        if self._closed:
+            return
+        self.emit(make_terminal(self.dropped))
+        self.close(timeout)
+
 
 class SocketEventWriter:
-    def __init__(self, socket_path: str, max_queued: int = 4096) -> None:
+    def __init__(
+        self,
+        socket_path: str,
+        max_queued: int = 4096,
+        max_delivery_seconds: float = 5.0,
+    ) -> None:
         self.socket_path = socket_path
         self._dropped = 0
         self._queue: queue.Queue = queue.Queue(maxsize=max(1, min(int(max_queued), 4_096)))
@@ -75,6 +92,7 @@ class SocketEventWriter:
         self._closed = False
         self._socket: socket.socket | None = None
         self._next_connect_at = 0.0
+        self._max_delivery_seconds = max(0.05, min(float(max_delivery_seconds), 30.0))
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._drain, name="loupe-event-writer", daemon=True)
         self._thread.start()
@@ -103,6 +121,17 @@ class SocketEventWriter:
                 self._dropped += 1
 
     def close(self, timeout: float = 5.0) -> None:
+        self._finish(terminal=None, timeout=timeout)
+
+    def finish(
+        self,
+        make_terminal: Callable[[int], Envelope],
+        timeout: float = 5.0,
+    ) -> None:
+        """Drain prior events, then create the summary from the final drop count."""
+        self._finish(terminal=_Terminal(make_terminal), timeout=timeout)
+
+    def _finish(self, terminal: _Terminal | None, timeout: float) -> None:
         deadline = time.monotonic() + max(0.0, timeout)
         with self._state_lock:
             if self._closed:
@@ -117,7 +146,7 @@ class SocketEventWriter:
         if should_drain:
             try:
                 remaining = max(0.0, deadline - time.monotonic())
-                self._queue.put(_CLOSE, timeout=remaining)
+                self._queue.put(terminal if terminal is not None else _CLOSE, timeout=remaining)
             except queue.Full:
                 pass
             self._thread.join(timeout=max(0.0, deadline - time.monotonic()))
@@ -152,21 +181,33 @@ class SocketEventWriter:
                 self._disconnect()
                 return
 
-            delivered = False
-            while not self._stop.is_set() and not delivered:
-                self._connect()
-                with self._state_lock:
-                    active_socket = self._socket
-                if active_socket is None:
-                    self._stop.wait(0.1)
-                    continue
-                try:
-                    active_socket.sendall(encode_line(item) + b"\n")
-                    delivered = True
-                except OSError:
-                    self._disconnect(active_socket)
-            if not delivered:
+            if isinstance(item, _Terminal):
+                terminal_envelope = item.make_envelope(self.dropped)
+                if not self._deliver(terminal_envelope):
+                    self._record_drops(1)
+                self._disconnect()
+                return
+
+            if not self._deliver(item):
                 self._record_drops(1)
+
+    def _deliver(self, envelope: Envelope) -> bool:
+        delivery_deadline = time.monotonic() + self._max_delivery_seconds
+        while not self._stop.is_set():
+            if time.monotonic() >= delivery_deadline:
+                return False
+            self._connect()
+            with self._state_lock:
+                active_socket = self._socket
+            if active_socket is None:
+                self._stop.wait(min(0.1, max(0.0, delivery_deadline - time.monotonic())))
+                continue
+            try:
+                active_socket.sendall(encode_line(envelope) + b"\n")
+                return True
+            except OSError:
+                self._disconnect(active_socket)
+        return False
 
     def _connect(self) -> None:
         now = time.monotonic()

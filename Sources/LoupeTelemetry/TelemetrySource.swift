@@ -4,6 +4,13 @@ import LoupeCore
 /// and replay implementations are interchangeable.
 public protocol TelemetrySource: Actor {
     func stream() -> AsyncStream<SystemSample>
+    func acquisitionStats() -> TelemetryAcquisitionStats
+}
+
+extension TelemetrySource {
+    /// Sources that predate protocol v2 or cannot close an accounting window
+    /// report unknown. Callers must not turn that absence into zero loss.
+    public func acquisitionStats() -> TelemetryAcquisitionStats { .unknown }
 }
 
 /// Chooses the telemetry implementation for a given cadence — the daemon's

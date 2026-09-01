@@ -54,6 +54,7 @@ public struct SessionSummary: Codable, Sendable, Equatable, Identifiable {
     public let sampleCount: Int
     public let transitions: [SessionTransition]
     public let basePath: String
+    public let acquisitionMetadata: SessionAcquisitionMetadata?
 
     public var id: UUID { storageID }
     public var filePair: SessionFilePair { SessionFilePair(basePath: basePath) }
@@ -140,6 +141,7 @@ private struct SessionManifest: Codable, Sendable {
     var sampleCount: Int
     var transitions: [SessionTransition]
     let basePath: String
+    var acquisitionMetadata: SessionAcquisitionMetadata?
 
     var latest: SessionTransition {
         transitions.last
@@ -160,7 +162,8 @@ private struct SessionManifest: Codable, Sendable {
             eventCount: eventCount,
             sampleCount: sampleCount,
             transitions: transitions,
-            basePath: basePath)
+            basePath: basePath,
+            acquisitionMetadata: acquisitionMetadata)
     }
 }
 
@@ -198,10 +201,19 @@ public actor SessionLibrary {
                         url, maximumBytes: 1_048_576),
                     let object = try? JSONSerialization.jsonObject(with: data)
                         as? [String: Any],
-                    Set(object.keys) == [
-                        "schemaVersion", "storageID", "runID", "displayName", "createdAt",
-                        "eventCount", "sampleCount", "transitions", "basePath",
-                    ],
+                    let schemaVersion = object["schemaVersion"] as? Int,
+                    {
+                        let baseKeys: Set<String> = [
+                            "schemaVersion", "storageID", "runID", "displayName",
+                            "createdAt", "eventCount", "sampleCount", "transitions",
+                            "basePath",
+                        ]
+                        let actual = Set(object.keys)
+                        return schemaVersion == 1
+                            ? actual == baseKeys
+                            : baseKeys.isSubset(of: actual)
+                                && actual.isSubset(of: baseKeys.union(["acquisitionMetadata"]))
+                    }(),
                     let transitions = object["transitions"] as? [[String: Any]],
                     transitions.allSatisfy({
                         Set($0.keys) == ["state", "atNs", "detail"]
@@ -212,7 +224,14 @@ public actor SessionLibrary {
                 let expectedBase = paths.sessionsDirectory
                     .appendingPathComponent(manifest.storageID.uuidString.lowercased()).path
                 guard url.lastPathComponent == expectedName,
-                    manifest.schemaVersion == 1,
+                    [1, 2].contains(manifest.schemaVersion),
+                    manifest.schemaVersion == 1
+                        ? manifest.acquisitionMetadata == nil
+                        : manifest.acquisitionMetadata.map({
+                            $0.schemaVersion
+                                == SessionAcquisitionMetadata.currentSchemaVersion
+                        }) ?? true,
+                    object["acquisitionMetadata"].map(validAcquisitionMetadataJSON) ?? true,
                     manifest.basePath == expectedBase,
                     !manifest.runID.isEmpty,
                     manifest.runID.utf8.count <= 128,
@@ -229,6 +248,7 @@ public actor SessionLibrary {
                             && $0.detail.utf8.count
                                 <= SessionRecordingLimits.maxTransitionDetailBytes
                     }),
+                    manifest.acquisitionMetadata?.isValid ?? true,
                     zip(manifest.transitions, manifest.transitions.dropFirst())
                         .allSatisfy({ pair in pair.0.atNs <= pair.1.atNs })
                 else { return nil }
@@ -251,6 +271,7 @@ public actor SessionLibrary {
             expectedBase + ".session.json",
             expectedBase + SessionFilePair.eventsSuffix,
             expectedBase + SessionFilePair.systemSuffix,
+            expectedBase + SessionFilePair.metadataSuffix,
         ]
         var validatedPaths: [String] = []
         for path in pathsToDelete {
@@ -274,6 +295,22 @@ public actor SessionLibrary {
     }
 }
 
+private func validAcquisitionMetadataJSON(_ value: Any) -> Bool {
+    guard let object = value as? [String: Any],
+        Set(object.keys) == ["schemaVersion", "eventLosses", "telemetryLosses"]
+    else { return false }
+    return ["eventLosses", "telemetryLosses"].allSatisfy { key in
+        guard let loss = object[key] as? [String: Any],
+            Set(loss.keys) == ["lowerBound", "breakdown"]
+                || Set(loss.keys) == ["exact", "lowerBound", "breakdown"],
+            let breakdown = loss["breakdown"] as? [String: Any]
+        else { return false }
+        return breakdown.values.allSatisfy { value in
+            (value as? NSNumber).map({ $0.intValue >= 0 }) ?? false
+        }
+    }
+}
+
 private struct RuntimeEventState: Sendable {
     var didStart = false
     var activeRequests: Set<String> = []
@@ -281,6 +318,11 @@ private struct RuntimeEventState: Sendable {
     var seenRequestIDs: Set<String> = []
     var lastOutputTokens: [String: UInt32] = [:]
     var lastTimestamp: UInt64?
+    var version: Int?
+    var lastSequence: UInt64?
+    var didSummarize = false
+
+    var hasStartedProducerWindow: Bool { didStart }
 
     mutating func resetRuntimeSequenceForReconnect() {
         // A new adapter connection must prove a fresh session_start, but its
@@ -290,16 +332,35 @@ private struct RuntimeEventState: Sendable {
         activeRequests.removeAll(keepingCapacity: true)
         prefilledRequests.removeAll(keepingCapacity: true)
         lastOutputTokens.removeAll(keepingCapacity: true)
+        version = nil
+        lastSequence = nil
+        didSummarize = false
     }
 
     mutating func accept(
         _ envelope: EventEnvelope, expectedRunID: String, requiredUID: uid_t
     ) -> Result<Int32?, SessionRecordingError> {
+        guard !didSummarize else {
+            return .failure(.runtimeProtocol("Transport summary must be terminal"))
+        }
         guard envelope.runId == expectedRunID else {
             return .failure(.runtimeProtocol("Unexpected run id"))
         }
         guard lastTimestamp.map({ envelope.ts >= $0 }) ?? true else {
             return .failure(.runtimeProtocol("Event timestamps must be monotonic"))
+        }
+        if envelope.kind == .sessionStart {
+            version = envelope.v
+        } else if version.map({ $0 == envelope.v }) == false {
+            return .failure(.runtimeProtocol("Protocol version changed within a connection"))
+        }
+        if envelope.v == EventProtocol.version {
+            guard let sequence = envelope.sequence,
+                lastSequence.map({ sequence > $0 }) ?? (sequence == 1)
+            else {
+                return .failure(.runtimeProtocol("Event sequence must increase from one"))
+            }
+            lastSequence = sequence
         }
 
         var targetPID: Int32?
@@ -344,6 +405,14 @@ private struct RuntimeEventState: Sendable {
             activeRequests.remove(requestID)
             prefilledRequests.remove(requestID)
             lastOutputTokens.removeValue(forKey: requestID)
+        case .transportSummary(let payload):
+            guard didStart, activeRequests.isEmpty,
+                let sequence = envelope.sequence,
+                payload.attemptedEvents == sequence - 1
+            else {
+                return .failure(.runtimeProtocol("Invalid transport summary"))
+            }
+            didSummarize = true
         }
         lastTimestamp = envelope.ts
         return .success(targetPID)
@@ -380,6 +449,13 @@ public actor SessionRecorder {
     private var telemetryTask: Task<Void, Never>?
     private var isStopping = false
     private var recordedEventBytes = 0
+    private var telemetryAcquisitionStats: [TelemetryAcquisitionStats] = []
+    private var recordingEventValidationDrops = 0
+    private var recordingEventLimitDrops = 0
+    private var recordingEventPersistenceDrops = 0
+    private var recordingTelemetryLimitDrops = 0
+    private var recordingTelemetryPersistenceDrops = 0
+    private var persistedTelemetrySequence: UInt64 = 0
 
     public init(
         paths: LoupeStoragePaths,
@@ -426,7 +502,7 @@ public actor SessionRecorder {
             state: .preparing, atNs: timebase.nowNanoseconds(),
             detail: "Preparing owner-only local storage")
         manifest = SessionManifest(
-            schemaVersion: 1,
+            schemaVersion: 2,
             storageID: storageID,
             runID: runID,
             displayName: resolvedName,
@@ -434,10 +510,18 @@ public actor SessionRecorder {
             eventCount: 0,
             sampleCount: 0,
             transitions: [initial],
-            basePath: basePath)
+            basePath: basePath,
+            acquisitionMetadata: nil)
         protocolState = RuntimeEventState()
         isStopping = false
         recordedEventBytes = 0
+        telemetryAcquisitionStats.removeAll(keepingCapacity: true)
+        recordingEventValidationDrops = 0
+        recordingEventLimitDrops = 0
+        recordingEventPersistenceDrops = 0
+        recordingTelemetryLimitDrops = 0
+        recordingTelemetryPersistenceDrops = 0
+        persistedTelemetrySequence = 0
 
         do {
             let sessionStore = try SessionStore(
@@ -474,7 +558,8 @@ public actor SessionRecorder {
                 ?? SessionSummary(
                     storageID: storageID, runID: runID, displayName: resolvedName,
                     createdAt: Date(), state: .failed, statusDetail: "State unavailable",
-                    eventCount: 0, sampleCount: 0, transitions: [], basePath: basePath)
+                    eventCount: 0, sampleCount: 0, transitions: [], basePath: basePath,
+                    acquisitionMetadata: nil)
         } catch {
             try? transition(
                 to: .failed,
@@ -497,15 +582,60 @@ public actor SessionRecorder {
             await socketServer.stop()
         }
         await eventTask?.value
+        let socketEventLosses = await socketServer?.acquisitionLosses() ?? .unknown
+        let recordingEventDrops = Self.saturatingSum([
+            recordingEventValidationDrops, recordingEventLimitDrops,
+            recordingEventPersistenceDrops,
+        ])
+        var eventBreakdown = socketEventLosses.breakdown
+        eventBreakdown["recording_validation"] = recordingEventValidationDrops
+        eventBreakdown["recording_limit"] = recordingEventLimitDrops
+        eventBreakdown["recording_persistence"] = recordingEventPersistenceDrops
+        let eventLosses = AcquisitionLossCount(
+            exact: socketEventLosses.exact.map {
+                Self.saturatingSum([$0, recordingEventDrops])
+            },
+            lowerBound: Self.saturatingSum([
+                socketEventLosses.lowerBound, recordingEventDrops,
+            ]),
+            breakdown: eventBreakdown)
         socketStatusTask?.cancel()
         await socketStatusTask?.value
         telemetryTask?.cancel()
         await telemetryTask?.value
 
+        let activeTelemetryStats = telemetryAcquisitionStats.filter(\.sourceWasActive)
+        let recorderTelemetryDrops = Self.saturatingSum([
+            recordingTelemetryLimitDrops, recordingTelemetryPersistenceDrops,
+        ])
+        let telemetryLowerBound = Self.saturatingSum(
+            activeTelemetryStats.map(\.lowerBound) + [recorderTelemetryDrops])
+        let telemetryLosses = AcquisitionLossCount(
+            exact: !activeTelemetryStats.isEmpty
+                && activeTelemetryStats.allSatisfy(\.complete)
+                ? telemetryLowerBound : nil,
+            lowerBound: telemetryLowerBound,
+            breakdown: [
+                "known_dropped_samples": Self.saturatingSum(
+                    activeTelemetryStats.map(\.droppedSamples)),
+                "sequence_gap_lower_bound": Self.saturatingSum(
+                    activeTelemetryStats.map(\.sequenceGapLowerBound)),
+                "malformed_samples": Self.saturatingSum(
+                    activeTelemetryStats.map(\.malformedSamples)),
+                "recording_limit": recordingTelemetryLimitDrops,
+                "recording_persistence": recordingTelemetryPersistenceDrops,
+            ])
+        let acquisitionMetadata = SessionAcquisitionMetadata(
+            eventLosses: eventLosses, telemetryLosses: telemetryLosses)
+        manifest?.acquisitionMetadata = acquisitionMetadata
+
         let stoppedAt = timebase.nowNanoseconds()
         do {
             try await store?.end(atNs: stoppedAt)
-            _ = try await store?.exportReplayPair(to: paths.sessionsDirectory)
+            try await store?.setAcquisitionMetadata(acquisitionMetadata)
+            _ = try await store?.exportReplayPair(
+                to: paths.sessionsDirectory,
+                acquisitionMetadata: acquisitionMetadata)
             if let counts = try await store?.counts() {
                 manifest?.eventCount = counts.events
                 manifest?.sampleCount = counts.system
@@ -571,6 +701,7 @@ public actor SessionRecorder {
             (manifest?.eventCount ?? 0) < SessionRecordingLimits.maxEvents,
             recordedEventBytes <= SessionRecordingLimits.maxEventBytes - encodedSize.partialValue
         else {
+            if recordingEventLimitDrops < Int.max { recordingEventLimitDrops += 1 }
             try? transition(
                 to: .degraded,
                 detail: "Event evidence limit reached; stop and start a new recording")
@@ -578,11 +709,13 @@ public actor SessionRecorder {
         }
         let stateBeforeEvent = manifest?.latest.state
         // Socket statuses and envelopes are intentionally separate streams,
-        // so a reconnecting adapter's first line can win the scheduling race
-        // against `.connected`. Any state that represents a broken/invalid
-        // transport may begin a fresh, fully validated runtime sequence.
+        // so a replacement adapter's first line can win the scheduling race
+        // against disconnect/connect status. A new session_start always
+        // starts a fresh producer window; EventSocketServer keeps the overall
+        // loss total unknown when the preceding window never closed.
         if envelope.kind == .sessionStart,
-            stateBeforeEvent == .reconnecting
+            protocolState.hasStartedProducerWindow
+                || stateBeforeEvent == .reconnecting
                 || stateBeforeEvent == .adapterDisconnected
                 || stateBeforeEvent == .degraded
                 || stateBeforeEvent == .denied
@@ -593,6 +726,9 @@ public actor SessionRecorder {
             envelope, expectedRunID: manifest?.runID ?? "", requiredUID: requiredUID)
         {
         case .failure(let failure):
+            if recordingEventValidationDrops < Int.max {
+                recordingEventValidationDrops += 1
+            }
             // Once the semantic stream is broken, accepting later request
             // events against stale state would create plausible-looking but
             // incomplete evidence. Require a fresh session_start.
@@ -603,30 +739,40 @@ public actor SessionRecorder {
         case .success(let targetPID):
             do {
                 try await store.append(events: [envelope])
-                recordedEventBytes += encodedSize.partialValue
-                manifest?.eventCount += 1
-                if let targetPID {
-                    await restartTelemetry(targetPID: targetPID, sessionID: sessionID)
-                    try transition(
-                        to: .recording,
-                        detail: "Correlating runtime events with pid \(targetPID) telemetry")
-                } else if stateBeforeEvent == .reconnecting
-                    || stateBeforeEvent == .adapterDisconnected
-                    || stateBeforeEvent == .degraded
-                    || stateBeforeEvent == .denied
-                {
-                    try transition(
-                        to: .recording,
-                        detail: "Adapter stream resumed; correlation is active")
-                } else if envelope.kind == .requestEnd {
-                    try persistManifest()
-                    emitCurrent()
-                }
             } catch {
+                if recordingEventPersistenceDrops < Int.max {
+                    recordingEventPersistenceDrops += 1
+                }
                 protocolState.resetRuntimeSequenceForReconnect()
                 try? transition(
                     to: .degraded,
                     detail: "Runtime event persistence failed; stop this recording")
+                return
+            }
+            recordedEventBytes += encodedSize.partialValue
+            manifest?.eventCount += 1
+            if let targetPID {
+                await restartTelemetry(targetPID: targetPID, sessionID: sessionID)
+                try? transition(
+                    to: .recording,
+                    detail: "Correlating runtime events with pid \(targetPID) telemetry")
+            } else if stateBeforeEvent == .reconnecting
+                || stateBeforeEvent == .adapterDisconnected
+                || stateBeforeEvent == .degraded
+                || stateBeforeEvent == .denied
+            {
+                try? transition(
+                    to: .recording,
+                    detail: "Adapter stream resumed; correlation is active")
+            } else if envelope.kind == .requestEnd {
+                do {
+                    try persistManifest()
+                    emitCurrent()
+                } catch {
+                    try? transition(
+                        to: .degraded,
+                        detail: "History manifest update failed; runtime event is durable")
+                }
             }
         }
     }
@@ -641,7 +787,10 @@ public actor SessionRecorder {
         telemetryTask = Task { [weak self] in
             var batch: [SystemSample] = []
             for await sample in await source.stream() {
-                guard !Task.isCancelled else { break }
+                // Persist a row already accepted from the source. The next
+                // iterator step observes cancellation; discarding here
+                // would invent a recorder drop instead of preserving the
+                // accepted prefix.
                 batch.append(sample)
                 if batch.count >= 20 {
                     await self?.persist(samples: batch, sessionID: sessionID)
@@ -651,34 +800,76 @@ public actor SessionRecorder {
             if !batch.isEmpty {
                 await self?.persist(samples: batch, sessionID: sessionID)
             }
+            let stats = await source.acquisitionStats()
+            await self?.recordTelemetryAcquisition(stats, sessionID: sessionID)
+        }
+    }
+
+    private func recordTelemetryAcquisition(
+        _ stats: TelemetryAcquisitionStats, sessionID: UUID
+    ) {
+        guard manifest?.storageID == sessionID else { return }
+        telemetryAcquisitionStats.append(stats)
+    }
+
+    private func recordTelemetryDrop(
+        count: Int, causedByLimit: Bool, sessionID: UUID
+    ) {
+        guard manifest?.storageID == sessionID, count > 0 else { return }
+        if causedByLimit {
+            recordingTelemetryLimitDrops = Self.saturatingSum([
+                recordingTelemetryLimitDrops, count,
+            ])
+        } else {
+            recordingTelemetryPersistenceDrops = Self.saturatingSum([
+                recordingTelemetryPersistenceDrops, count,
+            ])
         }
     }
 
     private func persist(samples: [SystemSample], sessionID: UUID) async {
         guard manifest?.storageID == sessionID, let store else { return }
+        let sequencedSamples = samples.map { sample in
+            if persistedTelemetrySequence < UInt64.max {
+                persistedTelemetrySequence += 1
+            }
+            return sample.withAcquisitionSequence(persistedTelemetrySequence)
+        }
+        let remaining = max(
+            0, SessionRecordingLimits.maxSamples - (manifest?.sampleCount ?? 0))
+        let accepted = Array(sequencedSamples.prefix(remaining))
         do {
-            let remaining = max(
-                0, SessionRecordingLimits.maxSamples - (manifest?.sampleCount ?? 0))
-            let accepted = Array(samples.prefix(remaining))
             if !accepted.isEmpty {
                 try await store.append(samples: accepted)
                 manifest?.sampleCount += accepted.count
             }
-            if accepted.count < samples.count {
-                try transition(
-                    to: .degraded,
-                    detail: "Telemetry limit reached; stop and start a new recording")
-                telemetryTask?.cancel()
-                return
-            }
-            if (manifest?.sampleCount ?? 0).isMultiple(of: 100) {
-                try persistManifest()
-                emitCurrent()
-            }
         } catch {
+            recordTelemetryDrop(
+                count: samples.count, causedByLimit: false, sessionID: sessionID)
             try? transition(
                 to: .degraded,
                 detail: "Telemetry persistence failed; stop this recording")
+            return
+        }
+        if accepted.count < samples.count {
+            recordTelemetryDrop(
+                count: samples.count - accepted.count, causedByLimit: true,
+                sessionID: sessionID)
+            try? transition(
+                to: .degraded,
+                detail: "Telemetry limit reached; stop and start a new recording")
+            telemetryTask?.cancel()
+            return
+        }
+        if (manifest?.sampleCount ?? 0).isMultiple(of: 100) {
+            do {
+                try persistManifest()
+                emitCurrent()
+            } catch {
+                try? transition(
+                    to: .degraded,
+                    detail: "History manifest update failed; telemetry is durable")
+            }
         }
     }
 
@@ -756,6 +947,15 @@ public actor SessionRecorder {
             guard rename(temporaryURL.path, url.path) == 0 else {
                 throw SessionRecordingError.unsafeStorage(url.path)
             }
+            let directoryDescriptor = open(
+                paths.sessionsDirectory.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+            guard directoryDescriptor >= 0 else {
+                throw SessionRecordingError.unsafeStorage(paths.sessionsDirectory.path)
+            }
+            defer { close(directoryDescriptor) }
+            guard fsync(directoryDescriptor) == 0 else {
+                throw SessionRecordingError.unsafeStorage(paths.sessionsDirectory.path)
+            }
         } catch {
             throw error
         }
@@ -789,7 +989,20 @@ public actor SessionRecorder {
         store = nil
         protocolState = RuntimeEventState()
         recordedEventBytes = 0
+        telemetryAcquisitionStats.removeAll(keepingCapacity: false)
+        recordingEventValidationDrops = 0
+        recordingEventLimitDrops = 0
+        recordingEventPersistenceDrops = 0
+        recordingTelemetryLimitDrops = 0
+        recordingTelemetryPersistenceDrops = 0
+        persistedTelemetrySequence = 0
         isStopping = false
         if !keepingManifest { manifest = nil }
+    }
+
+    private static func saturatingSum(_ values: [Int]) -> Int {
+        values.reduce(0) { partial, value in
+            partial > Int.max - value ? Int.max : partial + value
+        }
     }
 }

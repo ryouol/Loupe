@@ -16,6 +16,7 @@ from loupe_mlx.events import (
     RequestEnd,
     RequestStart,
     SessionStart,
+    TransportSummary,
     encode_line,
 )
 
@@ -55,6 +56,8 @@ ENCODABLE_PAYLOADS = [
     PrefillEnd(prompt_tokens=7),
     DecodeTick(output_tokens=1, kv_cache_bytes=2, active_memory_bytes=3),
     RequestEnd(output_tokens=9, finish_reason="stop"),
+    RequestEnd(output_tokens=1, finish_reason="stop", decode_duration_ns=10),
+    TransportSummary(attempted_events=10, producer_dropped_events=0),
     ErrorEvent(code="c", message="m"),
 ]
 

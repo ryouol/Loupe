@@ -9,7 +9,9 @@ public struct RequestMetrics: Codable, Sendable, Equatable, Identifiable {
     public let decodeDurationNs: UInt64
 
     public var ttftMs: Double { Double(ttftNs) / 1e6 }
-    /// Tokens over the decode window (prefill_end → request_end).
+    /// Tokens over the full prefill-end → request-end generation window,
+    /// including the first generated token. Protocol-v2 adapters report this
+    /// interval directly; legacy recordings fall back to event timestamps.
     public var decodeTokensPerSecond: Double {
         guard decodeDurationNs > 0 else { return 0 }
         return Double(outputTokens) / (Double(decodeDurationNs) / 1e9)
@@ -38,6 +40,8 @@ public enum SessionMetrics {
             var promptTokens = 0
             var endTs: UInt64?
             var outputTokens = 0
+            var runtimeDecodeDurationNs: UInt64?
+            var protocolVersion = EventProtocol.legacyVersion
             var order: Int
         }
         var partials: [String: Partial] = [:]
@@ -49,6 +53,7 @@ public enum SessionMetrics {
             case .requestStart:
                 partials[requestId, default: Partial(order: order)].startTs = envelope.ts
                 partials[requestId]?.order = order
+                partials[requestId]?.protocolVersion = envelope.v
                 order += 1
             case .prefillEnd(let payload):
                 partials[requestId, default: Partial(order: order)].prefillTs = envelope.ts
@@ -56,6 +61,7 @@ public enum SessionMetrics {
             case .requestEnd(let payload):
                 partials[requestId, default: Partial(order: order)].endTs = envelope.ts
                 partials[requestId]?.outputTokens = Int(payload.outputTokens)
+                partials[requestId]?.runtimeDecodeDurationNs = payload.decodeDurationNs
             default:
                 break
             }
@@ -67,6 +73,19 @@ public enum SessionMetrics {
                 guard let start = partial.startTs, let prefill = partial.prefillTs,
                     let end = partial.endTs, prefill >= start, end >= prefill
                 else { return nil }
+                let decodeDuration: UInt64
+                if let measured = partial.runtimeDecodeDurationNs {
+                    decodeDuration = measured
+                } else if partial.protocolVersion == EventProtocol.legacyVersion {
+                    decodeDuration = end - prefill
+                } else if partial.outputTokens == 0 {
+                    decodeDuration = 0
+                } else {
+                    // A v2 adapter that cannot establish the first-token
+                    // boundary must not silently publish a partial-window
+                    // throughput number.
+                    return nil
+                }
                 return (
                     partial.order,
                     RequestMetrics(
@@ -74,7 +93,7 @@ public enum SessionMetrics {
                         promptTokens: partial.promptTokens,
                         outputTokens: partial.outputTokens,
                         ttftNs: prefill - start,
-                        decodeDurationNs: end - prefill)
+                        decodeDurationNs: decodeDuration)
                 )
             }
             .sorted { $0.0 < $1.0 }

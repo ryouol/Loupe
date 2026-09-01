@@ -36,11 +36,16 @@ public struct DaemonHandshake: Codable, Sendable, Equatable {
     /// client protocol version is unsupported.
     func handshake(clientProtocolVersion: Int, reply: @escaping @Sendable (Data) -> Void)
     func startSampleStream(intervalMs: Int)
-    func stopSampleStream()
+    /// Stops the producer and replies with its terminal acquisition summary.
+    /// Empty data means the accounting window could not be closed.
+    func stopSampleStream(reply: @escaping @Sendable (Data) -> Void)
 }
 
 /// App-exported receiver interface (daemon → app).
 @objc public protocol LoupeSampleReceiverXPCProtocol {
     /// One JSON-encoded `SystemSample` per call.
     func deliver(sampleData: Data)
+    /// Terminal JSON-encoded `TelemetryAcquisitionStats`. If this message is
+    /// absent, the app reports helper acquisition integrity as unknown.
+    func deliver(summaryData: Data)
 }

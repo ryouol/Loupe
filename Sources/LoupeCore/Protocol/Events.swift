@@ -1,10 +1,13 @@
 import Foundation
 
-/// Event protocol v1 — hand-written mirror of `protocol/events.schema.json`.
-/// Drift is caught by cross-language round-trip and schema-conformance tests
-/// over the same committed examples.
+/// Event protocol v2 — hand-written mirror of `protocol/events.schema.json`.
+/// Version 2 adds producer sequencing, a terminal transport summary, and a
+/// runtime-measured decode interval. Version 1 remains replay-only compatible
+/// so existing recordings load with acquisition integrity reported as unknown.
 public enum EventProtocol {
-    public static let version = 1
+    public static let version = 2
+    public static let legacyVersion = 1
+    public static let supportedVersions: Set<Int> = [legacyVersion, version]
 }
 
 public enum EventKind: String, Codable, Sendable, CaseIterable {
@@ -16,13 +19,16 @@ public enum EventKind: String, Codable, Sendable, CaseIterable {
     case prefillEnd = "prefill_end"
     case decodeTick = "decode_tick"
     case requestEnd = "request_end"
+    case transportSummary = "transport_summary"
     case error = "error"
 
     /// Request-scoped events drop without a requestId — never guess one.
     public var requiresRequestID: Bool {
         switch self {
         case .requestStart, .prefillEnd, .decodeTick, .requestEnd: return true
-        case .sessionStart, .clockSync, .modelLoadStart, .modelLoadEnd, .error: return false
+        case .sessionStart, .clockSync, .modelLoadStart, .modelLoadEnd, .transportSummary,
+            .error:
+            return false
         }
     }
 }
@@ -114,10 +120,30 @@ public struct DecodeTickPayload: Codable, Sendable, Equatable {
 public struct RequestEndPayload: Codable, Sendable, Equatable {
     public let outputTokens: UInt32
     public let finishReason: String
+    /// Runtime-measured prefill-end → request-end interval, excluding prompt
+    /// evaluation and including the first generated token. It is nil for
+    /// protocol-v1 recordings.
+    public let decodeDurationNs: UInt64?
 
-    public init(outputTokens: UInt32, finishReason: String) {
+    public init(
+        outputTokens: UInt32, finishReason: String, decodeDurationNs: UInt64? = nil
+    ) {
         self.outputTokens = outputTokens
         self.finishReason = finishReason
+        self.decodeDurationNs = decodeDurationNs
+    }
+}
+
+public struct TransportSummaryPayload: Codable, Sendable, Equatable {
+    /// Number of application events attempted before this summary.
+    public let attemptedEvents: UInt64
+    /// Events rejected or abandoned by the adapter's transport writer before
+    /// this summary was accepted. Receipt of the summary closes the window.
+    public let producerDroppedEvents: UInt64
+
+    public init(attemptedEvents: UInt64, producerDroppedEvents: UInt64) {
+        self.attemptedEvents = attemptedEvents
+        self.producerDroppedEvents = producerDroppedEvents
     }
 }
 
@@ -142,6 +168,7 @@ public enum EventPayload: Sendable, Equatable {
     case prefillEnd(PrefillEndPayload)
     case decodeTick(DecodeTickPayload)
     case requestEnd(RequestEndPayload)
+    case transportSummary(TransportSummaryPayload)
     case error(ErrorPayload)
 
     public var kind: EventKind {
@@ -154,6 +181,7 @@ public enum EventPayload: Sendable, Equatable {
         case .prefillEnd: return .prefillEnd
         case .decodeTick: return .decodeTick
         case .requestEnd: return .requestEnd
+        case .transportSummary: return .transportSummary
         case .error: return .error
         }
     }
@@ -170,6 +198,7 @@ extension EventPayload: Encodable {
         case .prefillEnd(let p): try p.encode(to: encoder)
         case .decodeTick(let p): try p.encode(to: encoder)
         case .requestEnd(let p): try p.encode(to: encoder)
+        case .transportSummary(let p): try p.encode(to: encoder)
         case .error(let p): try p.encode(to: encoder)
         }
     }
@@ -194,6 +223,9 @@ extension EventPayload {
         case .prefillEnd: return .prefillEnd(try decoder.decode(PrefillEndPayload.self, from: data))
         case .decodeTick: return .decodeTick(try decoder.decode(DecodeTickPayload.self, from: data))
         case .requestEnd: return .requestEnd(try decoder.decode(RequestEndPayload.self, from: data))
+        case .transportSummary:
+            return .transportSummary(
+                try decoder.decode(TransportSummaryPayload.self, from: data))
         case .error: return .error(try decoder.decode(ErrorPayload.self, from: data))
         }
     }
@@ -201,6 +233,8 @@ extension EventPayload {
 
 public struct EventEnvelope: Sendable, Equatable {
     public let v: Int
+    /// Required and strictly increasing for protocol v2. Nil for legacy v1.
+    public let sequence: UInt64?
     /// Continuous-clock ns on the *emitter's* clock; clock_sync maps it here.
     public let ts: UInt64
     public let runId: String
@@ -209,8 +243,19 @@ public struct EventEnvelope: Sendable, Equatable {
 
     public var kind: EventKind { payload.kind }
 
-    public init(ts: UInt64, runId: String, requestId: String?, payload: EventPayload) {
-        self.v = EventProtocol.version
+    /// The default is legacy v1 so existing fixtures and internally assembled
+    /// events remain valid without an invented sequence. New wire producers
+    /// must explicitly pass `version: EventProtocol.version` and `sequence`.
+    public init(
+        version: Int = EventProtocol.legacyVersion,
+        sequence: UInt64? = nil,
+        ts: UInt64,
+        runId: String,
+        requestId: String?,
+        payload: EventPayload
+    ) {
+        self.v = version
+        self.sequence = sequence
         self.ts = ts
         self.runId = runId
         self.requestId = requestId
@@ -226,12 +271,13 @@ struct EventPayloadDecodingFailure: Error {
 
 extension EventEnvelope: Codable {
     enum CodingKeys: String, CodingKey {
-        case v, ts, runId, requestId, event, payload
+        case v, seq, ts, runId, requestId, event, payload
     }
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.v = try container.decode(Int.self, forKey: .v)
+        self.sequence = try container.decodeIfPresent(UInt64.self, forKey: .seq)
         self.ts = try container.decode(UInt64.self, forKey: .ts)
         self.runId = try container.decode(String.self, forKey: .runId)
         self.requestId = try container.decodeIfPresent(String.self, forKey: .requestId)
@@ -262,6 +308,9 @@ extension EventEnvelope: Codable {
             case .requestEnd:
                 self.payload = .requestEnd(
                     try container.decode(RequestEndPayload.self, forKey: .payload))
+            case .transportSummary:
+                self.payload = .transportSummary(
+                    try container.decode(TransportSummaryPayload.self, forKey: .payload))
             case .error:
                 self.payload = .error(
                     try container.decode(ErrorPayload.self, forKey: .payload))
@@ -274,6 +323,7 @@ extension EventEnvelope: Codable {
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(v, forKey: .v)
+        try container.encodeIfPresent(sequence, forKey: .seq)
         try container.encode(ts, forKey: .ts)
         try container.encode(runId, forKey: .runId)
         try container.encodeIfPresent(requestId, forKey: .requestId)

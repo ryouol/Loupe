@@ -12,6 +12,9 @@ Snapshot date: 2026-09-01. This is an engineering status, not a launch claim.
 - owner-only, same-UID, connection/buffer/line-bounded adapter socket;
 - exact protocol and telemetry keys, field constraints, and semantic event
   sequencing in Swift and Python;
+- protocol-v2 event/sample sequencing, terminal producer summaries, and
+  durable acquisition exact/lower-bound/breakdown metadata across socket,
+  XPC, SQLite, manifest, portable replay, History, UI, JSON, and CSV;
 - opaque UUID storage names and owner-only database/sidecar/manifest/export modes;
 - exclusive 0600 temporary writes for manifests, replay pairs, adapter files,
   and benchmark reports before atomic rename;
@@ -19,7 +22,13 @@ Snapshot date: 2026-09-01. This is an engineering status, not a launch claim.
   interrupted, failed, and stopped history;
 - PID-owner validation and runtime event sequence checks;
 - current sanitized bundled sample and one-click sample entry points;
-- hashed JSON/CSV evidence export;
+- hashed JSON/CSV evidence export with matching filenames, SHA-256 values,
+  counts, duration, thermal states, replay-parser drops, and acquisition loss;
+- unit-correct process CPU/RSS, GPU utilization, GPU power, and package-power
+  analysis lanes with shared scrubbing, unavailable-channel hiding,
+  metric-preserving downsampling, and accessibility summaries;
+- full-window MLX and llama.cpp decode throughput timing, including the first
+  output token, with unavailable v2 intervals omitted rather than inferred;
 - strict benchmark provenance and report-integrity comparison gates;
 - loopback-only llama.cpp HTTP client with redirects/proxies disabled and
   response limits enforced while bytes arrive;
@@ -30,13 +39,20 @@ Snapshot date: 2026-09-01. This is an engineering status, not a launch claim.
 
 ## Verified on this workspace host
 
-- debug and optimized `swift build`: pass with Swift 6 strict concurrency.
-- Python adapter suite: 46 passed, one optional MLX module skipped.
-- Bundled sample: 16 protocol events and 20 telemetry rows decode with zero
-  event drops.
+- Debug and optimized `swift build`: pass with Apple Swift 6.2 strict
+  concurrency on arm64 macOS.
+- Python adapter suite: 54 passed on Python 3.14.2; one optional live-MLX
+  hardware module skipped because MLX was not installed in this environment.
+- Bundled legacy sample: 16 protocol events and 20 telemetry rows decode with
+  zero replay-parser drops; recording-time acquisition remains correctly
+  unknown because this fixture predates protocol v2 metadata.
+- A separately compiled no-XCTest runtime harness decoded the 16-line v2
+  fixture, validated its terminal summary, drove two clean Unix-socket producer
+  windows, verified exact zero acquisition loss, replayed both windows, and
+  checked matching JSON/CSV source hashes, counts, thermal state, and loss fields.
 - Strict Swift/Ruff formatting, parse-only validation of every Swift source
   and test file, Actionlint, ShellCheck, `git diff --check`, XcodeGen,
-  locked bootstrap, plist validation, and sample validation pass.
+  locked dependency validation, plist validation, and sample validation pass.
 - `pip-audit` reports no known vulnerabilities in the locked Python
   development and optional MLX sets; OSV-Scanner reports no issues in the
   Swift/Python locks.
@@ -45,11 +61,18 @@ Snapshot date: 2026-09-01. This is an engineering status, not a launch claim.
 - Command Line Tools-only host limitation is known and detected by the release
   script.
 
-`swift test` stops at `no such module 'XCTest'`. The package script reaches
-`xcodebuild` and then stops because the selected developer directory is
-`/Library/Developer/CommandLineTools`. No app launch, screenshot review,
-signature, helper install, DMG, or notarization result was fabricated around
-those blockers.
+`swift test` stops at `no such module 'XCTest'`. `make build-app` successfully
+regenerates the Xcode project, then `xcodebuild` stops because the selected
+developer directory is `/Library/Developer/CommandLineTools`. Parse-only test
+validation and the compiled runtime harness supplement but do not replace those
+XCTest/app-target gates. No app launch, screenshot review, live MLX run,
+hardware benchmark, signature, helper install, DMG, or notarization result was
+fabricated around those blockers.
+
+Benchmark provenance is also bounded: the CLI hashes the dependency lock, but
+the runtime version, model revision, and model artifact SHA-256 are required
+operator assertions. This workspace did not independently resolve a model from
+those values or produce hardware benchmark evidence.
 
 ## Blocked here, mandatory before customer release
 

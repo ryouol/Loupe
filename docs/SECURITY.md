@@ -34,7 +34,8 @@ and shared-memory sidecars receive the same owner-only mode. Existing nodes
 are checked with `lstat`, owner identity, and a single-link requirement before
 permissions or database contents are touched, so symlink/hard-link substitution
 fails closed. Manifests and benchmark reports are
-written to exclusive 0600 siblings, synced, and renamed into place; Python
+written to exclusive 0600 siblings, synced, renamed into place, and followed
+by a parent-directory sync; Python
 adapter files reject symlinks and multi-link targets before truncation.
 
 ### App → root helper
@@ -50,6 +51,9 @@ then merges only the latest helper GPU/power fields. The helper never receives
 adapter events or owns a session database. Live telemetry retains only the
 newest 64 rows and the app-side XPC receiver retains only the newest 256 rows,
 so a stalled consumer cannot create an unbounded producer backlog.
+Both sides observe bounded-stream drops, attach monotonic sample sequences, and
+exchange a terminal accounting summary. If the terminal summary is lost, the
+recording preserves an observed lower bound and labels the total unknown.
 
 ### llama.cpp HTTP
 
@@ -102,6 +106,12 @@ renamed into place. Its memory use is bounded by one encoded row.
   that changed after load; this supports integrity comparison but not
   non-repudiation. CSV text cells are neutralized against spreadsheet-formula
   execution.
+- Acquisition metadata contains bounded counters and fixed internal breakdown
+  labels only. It does not add prompt or generated-text fields. Built-in
+  adapters still reduce runtime errors to non-sensitive categories.
+- Benchmark model revision, model SHA-256, and runtime version are required but
+  operator-supplied. Loupe hashes the supplied dependency lock; it does not
+  independently discover the model artifact behind those assertions.
 - No external penetration test, static analysis service, or independent
   dependency/license audit has been completed in this workspace.
 - Swift package and Python locks reduce dependency drift; release owners still

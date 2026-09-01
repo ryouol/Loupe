@@ -25,8 +25,8 @@ final class EventCodecTests: XCTestCase {
     func testValidExamplesRoundTripLosslessly() throws {
         let decoder = EventLineDecoder()
         let encoder = EventLineEncoder()
-        let lines = try exampleLines("protocol/examples/v1-events.ndjson")
-        XCTAssertEqual(lines.count, 14, "example file changed without updating tests")
+        let lines = try exampleLines("protocol/examples/v2-events.ndjson")
+        XCTAssertEqual(lines.count, 16, "example file changed without updating tests")
 
         for line in lines {
             switch decoder.decode(line: line) {
@@ -48,10 +48,11 @@ final class EventCodecTests: XCTestCase {
     func testValidExamplesFormOneSemanticStream() throws {
         var validator = EventStreamValidator()
         let decoder = EventLineDecoder()
-        for line in try exampleLines("protocol/examples/v1-events.ndjson") {
+        for line in try exampleLines("protocol/examples/v2-events.ndjson") {
             let envelope = try decoder.decode(line: line).get()
             XCTAssertTrue(validator.accepts(envelope))
         }
+        XCTAssertTrue(validator.hasTerminalSummary)
     }
 
     func testStreamValidatorRejectsReusedRequestIdentifier() {
@@ -74,27 +75,98 @@ final class EventCodecTests: XCTestCase {
         XCTAssertEqual(events.map { validator.accepts($0) }, [true, true, true, false])
     }
 
+    func testStreamValidatorAcceptsMultipleClosedProducerWindows() {
+        let payload = EventPayload.sessionStart(
+            .init(adapter: "a", adapterVersion: "1", runtime: "r", pid: 1))
+        let events = [
+            EventEnvelope(
+                version: EventProtocol.version, sequence: 1, ts: 1, runId: "r",
+                requestId: nil,
+                payload: payload),
+            EventEnvelope(
+                version: EventProtocol.version, sequence: 2, ts: 2, runId: "r",
+                requestId: nil,
+                payload: .transportSummary(
+                    .init(attemptedEvents: 1, producerDroppedEvents: 0))),
+            EventEnvelope(
+                version: EventProtocol.version, sequence: 1, ts: 3, runId: "r",
+                requestId: nil,
+                payload: payload),
+            EventEnvelope(
+                version: EventProtocol.version, sequence: 2, ts: 4, runId: "r",
+                requestId: nil,
+                payload: .transportSummary(
+                    .init(attemptedEvents: 1, producerDroppedEvents: 0))),
+        ]
+        var validator = EventStreamValidator()
+        XCTAssertTrue(events.allSatisfy { validator.accepts($0) })
+        XCTAssertTrue(validator.hasTerminalSummary)
+    }
+
+    func testStreamValidatorKeepsReplacementAfterInterruptedWindowReplayable() {
+        let start = EventPayload.sessionStart(
+            .init(adapter: "a", adapterVersion: "2", runtime: "r", pid: 1))
+        let events = [
+            EventEnvelope(
+                version: EventProtocol.version, sequence: 1, ts: 1, runId: "r",
+                requestId: nil, payload: start),
+            EventEnvelope(
+                version: EventProtocol.version, sequence: 2, ts: 2, runId: "r",
+                requestId: "q-first", payload: .requestStart(.init(promptTokens: 1))),
+            EventEnvelope(
+                version: EventProtocol.version, sequence: 1, ts: 3, runId: "r",
+                requestId: nil, payload: start),
+            EventEnvelope(
+                version: EventProtocol.version, sequence: 2, ts: 4, runId: "r",
+                requestId: nil,
+                payload: .transportSummary(
+                    .init(attemptedEvents: 1, producerDroppedEvents: 0))),
+        ]
+
+        var validator = EventStreamValidator()
+        XCTAssertTrue(events.allSatisfy { validator.accepts($0) })
+        XCTAssertFalse(validator.hasOpenRequests)
+        XCTAssertFalse(
+            validator.hasTerminalSummary,
+            "an interrupted earlier window prevents an all-windows-complete claim")
+    }
+
     func testExamplesCoverEveryEventKind() throws {
         let decoder = EventLineDecoder()
-        let lines = try exampleLines("protocol/examples/v1-events.ndjson")
+        let lines = try exampleLines("protocol/examples/v2-events.ndjson")
         let kinds = lines.compactMap { try? decoder.decode(line: $0).get().kind }
         XCTAssertEqual(Set(kinds), Set(EventKind.allCases))
     }
 
     func testExtremeUnsignedValuesSurvive() throws {
         let decoder = EventLineDecoder()
-        let lines = try exampleLines("protocol/examples/v1-events.ndjson")
-        // The last example line carries UInt64.max / UInt32.max on purpose.
-        guard let last = lines.last,
-            case .success(let envelope) = decoder.decode(line: last),
+        let lines = try exampleLines("protocol/examples/v2-events.ndjson")
+        // One example carries UInt64.max / UInt32.max on purpose.
+        guard
+            let line = lines.first(where: {
+                (try? decoder.decode(line: $0).get().kind) == .decodeTick
+                    && String(decoding: $0, as: UTF8.self).contains("4294967295")
+            }),
+            case .success(let envelope) = decoder.decode(line: line),
             case .decodeTick(let tick) = envelope.payload
         else {
             XCTFail("expected trailing decode_tick example")
             return
         }
-        XCTAssertEqual(envelope.ts, UInt64.max)
+        XCTAssertEqual(envelope.ts, UInt64.max - 2)
         XCTAssertEqual(tick.outputTokens, UInt32.max)
         XCTAssertEqual(tick.kvCacheBytes, UInt64.max)
+    }
+
+    func testLegacyV1ReplayRemainsCompatibleWithoutSequence() throws {
+        let decoder = EventLineDecoder()
+        let lines = try exampleLines("protocol/examples/v1-events.ndjson")
+        XCTAssertEqual(lines.count, 14)
+        for line in lines {
+            let envelope = try decoder.decode(line: line).get()
+            XCTAssertEqual(envelope.v, EventProtocol.legacyVersion)
+            XCTAssertNil(envelope.sequence)
+        }
     }
 
     func testMalformedLinesDropWithExpectedReasonsAndNeverCrash() throws {

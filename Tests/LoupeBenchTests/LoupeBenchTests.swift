@@ -72,6 +72,41 @@ final class SessionMetricsTests: XCTestCase {
         XCTAssertEqual(metrics.map(\.requestId), ["q-ok"])
     }
 
+    func testRuntimeDecodeDurationIncludesFirstTokenAndHandlesOneToken() {
+        let events: [EventEnvelope] = [
+            envelope(.requestStart(.init(promptTokens: nil)), ts: 1, requestId: "q-1"),
+            envelope(.prefillEnd(.init(promptTokens: 8)), ts: 100, requestId: "q-1"),
+            envelope(
+                .decodeTick(.init(outputTokens: 1, kvCacheBytes: 0, activeMemoryBytes: 0)),
+                ts: 900, requestId: "q-1"),
+            envelope(
+                .requestEnd(
+                    .init(
+                        outputTokens: 1, finishReason: "eos",
+                        decodeDurationNs: 40_000_000)),
+                ts: 1_000_000_000, requestId: "q-1"),
+        ]
+        let metric = SessionMetrics.perRequest(events: events).first
+        XCTAssertEqual(metric?.decodeDurationNs, 40_000_000)
+        XCTAssertEqual(metric?.decodeTokensPerSecond ?? -1, 25, accuracy: 0.0001)
+    }
+
+    func testProtocolV2DoesNotInventRateWithoutMeasuredDecodeWindow() {
+        let events: [EventEnvelope] = [
+            EventEnvelope(
+                version: EventProtocol.version, sequence: 1, ts: 1, runId: "r-m",
+                requestId: "q-1", payload: .requestStart(.init(promptTokens: nil))),
+            EventEnvelope(
+                version: EventProtocol.version, sequence: 2, ts: 100, runId: "r-m",
+                requestId: "q-1", payload: .prefillEnd(.init(promptTokens: 8))),
+            EventEnvelope(
+                version: EventProtocol.version, sequence: 3, ts: 1_000, runId: "r-m",
+                requestId: "q-1",
+                payload: .requestEnd(.init(outputTokens: 1, finishReason: "eos"))),
+        ]
+        XCTAssertTrue(SessionMetrics.perRequest(events: events).isEmpty)
+    }
+
     func testRequestsKeepStreamOrder() {
         var events: [EventEnvelope] = []
         for (index, id) in ["q-3", "q-1", "q-2"].enumerated() {
@@ -91,11 +126,16 @@ final class SessionMetricsTests: XCTestCase {
 }
 
 final class CooldownGateTests: XCTestCase {
-    func testAlreadyNominalPassesImmediately() async {
+    func testNominalMustRemainStableForTheDwell() async {
         let stream = AsyncStream<ThermalState> { continuation in
             continuation.yield(.nominal)
+            Task {
+                try? await Task.sleep(for: .milliseconds(25))
+                continuation.yield(.nominal)
+            }
         }
-        let outcome = await CooldownGate.waitForNominal(states: stream, timeout: .seconds(5))
+        let outcome = await CooldownGate.waitForNominal(
+            states: stream, timeout: .seconds(5), stableFor: .milliseconds(20))
         XCTAssertEqual(outcome, .nominal)
     }
 
@@ -106,10 +146,33 @@ final class CooldownGateTests: XCTestCase {
                 try? await Task.sleep(for: .milliseconds(30))
                 continuation.yield(.fair)
                 continuation.yield(.nominal)
+                try? await Task.sleep(for: .milliseconds(25))
+                continuation.yield(.nominal)
             }
         }
-        let outcome = await CooldownGate.waitForNominal(states: stream, timeout: .seconds(5))
+        let outcome = await CooldownGate.waitForNominal(
+            states: stream, timeout: .seconds(5), stableFor: .milliseconds(20))
         XCTAssertEqual(outcome, .nominal)
+    }
+
+    func testHotObservationResetsNominalDwell() async {
+        let stream = AsyncStream<ThermalState> { continuation in
+            Task {
+                continuation.yield(.nominal)
+                try? await Task.sleep(for: .milliseconds(15))
+                continuation.yield(.serious)
+                try? await Task.sleep(for: .milliseconds(15))
+                continuation.yield(.nominal)
+                try? await Task.sleep(for: .milliseconds(25))
+                continuation.yield(.nominal)
+            }
+        }
+        let clock = ContinuousClock()
+        let start = clock.now
+        let outcome = await CooldownGate.waitForNominal(
+            states: stream, timeout: .seconds(5), stableFor: .milliseconds(20))
+        XCTAssertEqual(outcome, .nominal)
+        XCTAssertGreaterThanOrEqual(clock.now - start, .milliseconds(50))
     }
 
     func testNeverNominalTimesOutCleanlyInsteadOfHanging() async {

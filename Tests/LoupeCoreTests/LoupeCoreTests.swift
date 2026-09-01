@@ -23,4 +23,29 @@ final class LoupeCoreTests: XCTestCase {
     func testVersionIsSet() {
         XCTAssertEqual(Loupe.version, "0.2.0")
     }
+
+    func testTelemetryLossLowerBoundDoesNotDoubleCountSequenceEvidence() {
+        let stats = TelemetryAcquisitionStats(
+            droppedSamples: 2, sequenceGapLowerBound: 3, malformedSamples: 1,
+            complete: true)
+        XCTAssertEqual(stats.lowerBound, 3)
+
+        let disjointKnownLosses = TelemetryAcquisitionStats(
+            droppedSamples: 2, sequenceGapLowerBound: 1, malformedSamples: 3,
+            complete: true)
+        XCTAssertEqual(disjointKnownLosses.lowerBound, 5)
+    }
+
+    func testAcquisitionBreakdownRejectsArbitraryExportText() {
+        XCTAssertFalse(
+            AcquisitionLossCount(
+                exact: nil, lowerBound: 0,
+                breakdown: ["prompt_or_user_supplied_text": 0]
+            ).isValid)
+        XCTAssertTrue(
+            AcquisitionLossCount(
+                exact: 1, lowerBound: 1,
+                breakdown: ["recording_validation": 1]
+            ).isValid)
+    }
 }

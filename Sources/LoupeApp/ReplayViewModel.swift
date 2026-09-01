@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 import LoupeCore
 import LoupeSampler
@@ -24,7 +25,9 @@ public final class ReplayViewModel {
         public let systemUsedGB: Double
         public let swapUsedGB: Double
         public let processRSSGB: Double?
+        public let processCPUPercent: Double?
         public let gpuBusyPercent: Double?
+        public let gpuPowerWatts: Double?
         public let packagePowerWatts: Double?
     }
 
@@ -42,6 +45,8 @@ public final class ReplayViewModel {
     /// Empty when the session carries no GPU channels — the band hides
     /// entirely rather than charting zeros.
     public private(set) var gpuChartPoints: [ChartPoint] = []
+    public private(set) var gpuPowerChartPoints: [ChartPoint] = []
+    public private(set) var packagePowerChartPoints: [ChartPoint] = []
     public private(set) var milestones: [Milestone] = []
     public private(set) var requestMetrics: [RequestMetrics] = []
     public private(set) var annotations: [AnnotationRow] = []
@@ -51,14 +56,15 @@ public final class ReplayViewModel {
     public private(set) var eventDrops = 0
     public private(set) var eventSourceSHA256: String?
     public private(set) var telemetrySourceSHA256: String?
+    public private(set) var acquisitionSourceSHA256: String?
+    public private(set) var acquisitionMetadata: SessionAcquisitionMetadata?
     public private(set) var thermalStatesSeen: [ThermalState] = []
     public private(set) var durationSeconds: Double = 0
     public private(set) var isLoaded = false
     public private(set) var loadFailure: String?
     var requestSpans: [TimelineGeometry.RequestSpan] = []
-    /// Cached x-values for scrub lookups: readout(at:) runs on every drag
-    /// frame and must not re-map 2k points per mouse move.
-    private var chartSeconds: [Double] = []
+    private var samplePoints: [ChartPoint] = []
+    private var sampleSeconds: [Double] = []
     /// Shared scrubber position; every lane reads this one value, which is
     /// what keeps them aligned by construction.
     public var scrubSeconds: Double?
@@ -74,8 +80,10 @@ public final class ReplayViewModel {
         // the main actor, concurrently for the two files.
         async let telemetry = Self.loadTelemetry(from: session.systemURL)
         async let events = Self.loadEvents(from: session.eventsURL)
+        async let metadata = Self.loadAcquisitionMetadata(from: session.metadataURL)
         let telemetryResult = await telemetry
         let eventsResult = await events
+        let metadataResult = await metadata
         let assembled = Self.assemble(
             samples: telemetryResult.samples, envelopes: eventsResult.envelopes)
 
@@ -84,10 +92,15 @@ public final class ReplayViewModel {
         eventDrops = eventsResult.drops
         telemetrySourceSHA256 = telemetryResult.sourceSHA256
         eventSourceSHA256 = eventsResult.sourceSHA256
+        acquisitionMetadata = metadataResult.metadata
+        acquisitionSourceSHA256 = metadataResult.sourceSHA256
         chartPoints = assembled.chartPoints
-        chartSeconds = assembled.chartPoints.map(\.seconds)
+        samplePoints = assembled.samplePoints
+        sampleSeconds = assembled.samplePoints.map(\.seconds)
         processChartPoints = assembled.processChartPoints
         gpuChartPoints = assembled.gpuChartPoints
+        gpuPowerChartPoints = assembled.gpuPowerChartPoints
+        packagePowerChartPoints = assembled.packagePowerChartPoints
         milestones = assembled.milestones
         requestMetrics = assembled.metrics
         requestSpans = assembled.spans
@@ -97,7 +110,7 @@ public final class ReplayViewModel {
         thermalStatesSeen = assembled.thermalStatesSeen
         durationSeconds = assembled.durationSeconds
 
-        loadFailure = telemetryResult.failure ?? eventsResult.failure
+        loadFailure = telemetryResult.failure ?? eventsResult.failure ?? metadataResult.failure
         isLoaded = loadFailure == nil
     }
 
@@ -108,23 +121,89 @@ public final class ReplayViewModel {
         public let systemUsedGB: Double
         public let swapUsedGB: Double
         public let processRSSGB: Double?
+        public let processCPUPercent: Double?
         public let gpuBusyPercent: Double?
+        public let gpuPowerWatts: Double?
+        public let packagePowerWatts: Double?
         public let activeRequestId: String?
     }
 
     /// Everything the readout shows comes from one scrub position resolved
     /// against one point index — the alignment tests pin this.
     public func readout(at seconds: Double) -> ScrubReadout? {
-        guard let index = TimelineGeometry.nearestIndex(in: chartSeconds, to: seconds)
+        guard let index = TimelineGeometry.nearestIndex(in: sampleSeconds, to: seconds)
         else { return nil }
-        let point = chartPoints[index]
+        let point = samplePoints[index]
         return ScrubReadout(
             seconds: point.seconds,
             systemUsedGB: point.systemUsedGB,
             swapUsedGB: point.swapUsedGB,
             processRSSGB: point.processRSSGB,
+            processCPUPercent: point.processCPUPercent,
             gpuBusyPercent: point.gpuBusyPercent,
+            gpuPowerWatts: point.gpuPowerWatts,
+            packagePowerWatts: point.packagePowerWatts,
             activeRequestId: TimelineGeometry.activeSpan(in: requestSpans, at: seconds)?.id)
+    }
+
+    public var acquisitionLossDisplay: String {
+        guard let acquisitionMetadata else { return "unknown" }
+        let event = acquisitionMetadata.eventLosses
+        let telemetry = acquisitionMetadata.telemetryLosses
+        if let eventExact = event.exact, let telemetryExact = telemetry.exact {
+            return String(Self.saturatingSum(eventExact, telemetryExact))
+        }
+        let observed = Self.saturatingSum(event.lowerBound, telemetry.lowerBound)
+        return observed == 0 ? "unknown" : "≥\(observed) · unknown total"
+    }
+
+    public var memoryAccessibilitySummary: String {
+        Self.rangeSummary(
+            chartPoints.map(\.systemUsedGB), unit: "GB memory",
+            count: chartPoints.count)
+    }
+
+    public var processMemoryAccessibilitySummary: String {
+        Self.rangeSummary(
+            processChartPoints.compactMap(\.processRSSGB), unit: "GB RSS",
+            count: processChartPoints.count)
+    }
+
+    public var processCPUAccessibilitySummary: String {
+        Self.rangeSummary(
+            processChartPoints.compactMap(\.processCPUPercent), unit: "percent CPU",
+            count: processChartPoints.count)
+    }
+
+    public var gpuUtilizationAccessibilitySummary: String {
+        Self.rangeSummary(
+            gpuChartPoints.compactMap(\.gpuBusyPercent), unit: "percent GPU busy",
+            count: gpuChartPoints.count)
+    }
+
+    public var powerAccessibilitySummary: String {
+        let values =
+            gpuPowerChartPoints.compactMap(\.gpuPowerWatts)
+            + packagePowerChartPoints.compactMap(\.packagePowerWatts)
+        return Self.rangeSummary(
+            values, unit: "watts",
+            count: max(
+                gpuPowerChartPoints.count, packagePowerChartPoints.count))
+    }
+
+    private nonisolated static func rangeSummary(
+        _ values: [Double], unit: String, count: Int
+    ) -> String {
+        guard let minimum = values.min(), let maximum = values.max() else {
+            return "Unavailable"
+        }
+        return String(
+            format: "%d plotted samples; %.2f to %.2f %@",
+            locale: Locale(identifier: "en_US_POSIX"), count, minimum, maximum, unit)
+    }
+
+    private nonisolated static func saturatingSum(_ lhs: Int, _ rhs: Int) -> Int {
+        lhs > Int.max - rhs ? Int.max : lhs + rhs
     }
 
     // MARK: - Loading
@@ -173,6 +252,40 @@ public final class ReplayViewModel {
         )
     }
 
+    private nonisolated static func loadAcquisitionMetadata(
+        from url: URL
+    ) async -> (
+        metadata: SessionAcquisitionMetadata?, failure: String?, sourceSHA256: String?
+    ) {
+        var node = stat()
+        if lstat(url.path, &node) != 0, errno == ENOENT {
+            return (nil, nil, nil)
+        }
+        do {
+            let data = try ReplayResourceLimits.read(url, maximumBytes: 65_536)
+            guard
+                let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                Set(root.keys) == ["schemaVersion", "eventLosses", "telemetryLosses"],
+                let event = root["eventLosses"] as? [String: Any],
+                let telemetry = root["telemetryLosses"] as? [String: Any],
+                [event, telemetry].allSatisfy({
+                    Set($0.keys) == ["exact", "lowerBound", "breakdown"]
+                        || Set($0.keys) == ["lowerBound", "breakdown"]
+                }),
+                let metadata = try? JSONDecoder().decode(
+                    SessionAcquisitionMetadata.self, from: data),
+                metadata.isValid
+            else {
+                return (
+                    nil, "Acquisition metadata is malformed or unsupported: \(url.path)", nil
+                )
+            }
+            return (metadata, nil, sourceSHA256(data))
+        } catch {
+            return (nil, error.localizedDescription, nil)
+        }
+    }
+
     nonisolated static func sourceSHA256(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
@@ -180,9 +293,12 @@ public final class ReplayViewModel {
     // MARK: - Assembly
 
     private struct Assembled: Sendable {
+        var samplePoints: [ChartPoint] = []
         var chartPoints: [ChartPoint] = []
         var processChartPoints: [ChartPoint] = []
         var gpuChartPoints: [ChartPoint] = []
+        var gpuPowerChartPoints: [ChartPoint] = []
+        var packagePowerChartPoints: [ChartPoint] = []
         var milestones: [Milestone] = []
         var metrics: [RequestMetrics] = []
         var spans: [TimelineGeometry.RequestSpan] = []
@@ -212,6 +328,8 @@ public final class ReplayViewModel {
             ? envelopes
             : envelopes.map { envelope in
                 EventEnvelope(
+                    version: envelope.v,
+                    sequence: envelope.sequence,
                     ts: TimelineMerge.shifted(envelope.ts, byRemovingOffset: offset),
                     runId: envelope.runId,
                     requestId: envelope.requestId,
@@ -232,14 +350,22 @@ public final class ReplayViewModel {
                 systemUsedGB: Double(sample.system.memoryUsedBytes) / 1e9,
                 swapUsedGB: Double(sample.system.swapUsedBytes) / 1e9,
                 processRSSGB: sample.process.map { Double($0.rssBytes) / 1e9 },
+                processCPUPercent: sample.process?.cpuPercent,
                 gpuBusyPercent: sample.system.gpuBusyPercent,
+                gpuPowerWatts: sample.system.gpuPowerMilliwatts.map { $0 / 1_000 },
                 packagePowerWatts: sample.system.packagePowerMilliwatts.map { $0 / 1_000 })
         }
-        assembled.chartPoints = Downsample.lttb(
-            allPoints, to: maxChartPoints, x: { $0.seconds }, y: { $0.systemUsedGB })
-        assembled.processChartPoints = assembled.chartPoints.filter { $0.processRSSGB != nil }
+        assembled.samplePoints = allPoints
+        assembled.chartPoints = metricPreservingDownsample(allPoints)
+        assembled.processChartPoints = assembled.chartPoints.filter {
+            $0.processRSSGB != nil || $0.processCPUPercent != nil
+        }
         assembled.gpuChartPoints = assembled.chartPoints.filter {
-            $0.gpuBusyPercent != nil || $0.packagePowerWatts != nil
+            $0.gpuBusyPercent != nil
+        }
+        assembled.gpuPowerChartPoints = assembled.chartPoints.filter { $0.gpuPowerWatts != nil }
+        assembled.packagePowerChartPoints = assembled.chartPoints.filter {
+            $0.packagePowerWatts != nil
         }
 
         for envelope in unifiedEnvelopes {
@@ -257,8 +383,7 @@ public final class ReplayViewModel {
         }
 
         assembled.metrics = SessionMetrics.perRequest(events: unifiedEnvelopes)
-        assembled.spans = TimelineGeometry.requestSpans(
-            metrics: assembled.metrics, milestones: assembled.milestones)
+        assembled.spans = TimelineGeometry.requestSpans(milestones: assembled.milestones)
         assembled.annotations = AnnotationEngine.annotate(
             samples: samples, events: unifiedEnvelopes, metrics: assembled.metrics
         )
@@ -275,6 +400,34 @@ public final class ReplayViewModel {
             assembled.chartPoints.last?.seconds ?? 0,
             assembled.milestones.last?.offsetSeconds ?? 0)
         return assembled
+    }
+
+    /// Allocate the 2k point budget across every displayed metric and retain
+    /// the union of significant indices. A CPU, swap, or power spike must not
+    /// disappear merely because memory happened to be flat in that bucket.
+    private nonisolated static func metricPreservingDownsample(
+        _ points: [ChartPoint]
+    ) -> [ChartPoint] {
+        guard points.count > maxChartPoints else { return points }
+        let series: [(ChartPoint) -> Double?] = [
+            { $0.systemUsedGB }, { $0.swapUsedGB }, { $0.processRSSGB },
+            { $0.processCPUPercent }, { $0.gpuBusyPercent }, { $0.gpuPowerWatts },
+            { $0.packagePowerWatts },
+        ]
+        let budget = max(3, maxChartPoints / series.count)
+        var indices: Set<Int> = [0, points.count - 1]
+        for value in series {
+            let available = points.enumerated().compactMap { index, point in
+                value(point).map { (index: index, point: point, value: $0) }
+            }
+            for selected in Downsample.lttb(
+                available, to: budget,
+                x: { $0.point.seconds }, y: { $0.value })
+            {
+                indices.insert(selected.index)
+            }
+        }
+        return indices.sorted().map { points[$0] }
     }
 
     private nonisolated static func describe(_ payload: EventPayload) -> String {
@@ -297,6 +450,8 @@ public final class ReplayViewModel {
             return "\(p.outputTokens) tokens"
         case .requestEnd(let p):
             return "\(p.outputTokens) tokens · \(p.finishReason)"
+        case .transportSummary(let p):
+            return "\(p.attemptedEvents) attempted · \(p.producerDroppedEvents) producer drops"
         case .error(let p):
             return "\(p.code): \(p.message)"
         }

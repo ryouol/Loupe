@@ -1,5 +1,5 @@
 """The M1.3 instrumentation API: wrap mlx-lm load/generate calls and stream
-protocol-v1 events to the Loupe app's user-owned Unix socket.
+protocol-v2 events to the Loupe app's user-owned Unix socket.
 
 Usage:
 
@@ -19,8 +19,10 @@ absorbs, and the generator yields mlx-lm's responses unchanged.
 
 from __future__ import annotations
 
+import math
 import os
 import uuid
+from collections.abc import Callable
 from typing import Any, Iterator
 
 from . import events as ev
@@ -39,6 +41,7 @@ class LoupeInstrument:
         run_id: str | None = None,
         runtime: str = "mlx",
         writer: object | None = None,
+        clock: Callable[[], int] = now_ns,
     ) -> None:
         self.run_id = run_id or os.environ.get("LOUPE_RUN_ID") or f"r-{uuid.uuid4().hex[:8]}"
         if not 1 <= len(self.run_id) <= 128:
@@ -49,7 +52,14 @@ class LoupeInstrument:
         # to the user app socket, the recorder and bench write files.
         resolved_socket = socket_path or os.environ.get("LOUPE_SOCKET_PATH") or DEFAULT_SOCKET_PATH
         self._writer = writer if writer is not None else SocketEventWriter(resolved_socket)
+        self._clock = clock
         self._request_counter = 0
+        # A logical run can survive an adapter process relaunch. Include a
+        # per-instance nonce so the restarted counter cannot reuse request
+        # identifiers already persisted under the same LOUPE_RUN_ID.
+        self._request_namespace = uuid.uuid4().hex
+        self._sequence = 0
+        self._closed = False
         self._emit(
             ev.SessionStart(
                 adapter="loupe-mlx",
@@ -61,8 +71,8 @@ class LoupeInstrument:
         # Adapter and app read the same mach_continuous clock, so the
         # NTP exchange is degenerate: offset 0 with zero uncertainty. The
         # event still flows so multi-clock adapters stay wire-compatible.
-        now = now_ns()
-        self._emit(ev.ClockSync(t0=now, t1=now, t2=now, t3=now))
+        now = self._clock()
+        self._emit(ev.ClockSync(t0=now, t1=now, t2=now, t3=now), at_ns=now)
 
     @property
     def dropped_events(self) -> int:
@@ -107,18 +117,47 @@ class LoupeInstrument:
         from mlx_lm import stream_generate
 
         self._request_counter += 1
-        request_id = f"q-{self._request_counter}"
+        request_id = f"q-{self._request_namespace}-{self._request_counter}"
         active_at_start = max(0, int(mx.get_active_memory()))
-        self._emit(ev.RequestStart(), request_id)
+        request_start_ns = self._clock()
+        self._emit(ev.RequestStart(), request_id, at_ns=request_start_ns)
 
         produced = 0
         finish_reason = "stop"
         prefill_done = False
+        decode_start_ns: int | None = None
+        last_response_at_ns: int | None = None
         try:
             for response in stream_generate(model, tokenizer, prompt=prompt, **kwargs):
+                response_at_ns = self._clock()
+                last_response_at_ns = response_at_ns
                 if not prefill_done:
                     prompt_tokens = int(getattr(response, "prompt_tokens", 0) or 0)
-                    self._emit(ev.PrefillEnd(prompt_tokens=prompt_tokens), request_id)
+                    prompt_tps = float(getattr(response, "prompt_tps", 0) or 0)
+                    if math.isfinite(prompt_tps) and prompt_tps > 0 and prompt_tokens > 0:
+                        prompt_duration_ns = int(prompt_tokens / prompt_tps * 1_000_000_000)
+                        prefill_end_ns = max(
+                            request_start_ns,
+                            min(
+                                response_at_ns,
+                                min(
+                                    ev.MAX_UINT64,
+                                    request_start_ns + max(1, prompt_duration_ns),
+                                ),
+                            ),
+                        )
+                        decode_start_ns = prefill_end_ns
+                    else:
+                        # mlx-lm exposes no first-token boundary without its
+                        # prompt timing. Keep the milestone honest but leave
+                        # v2 decode duration unavailable instead of dividing
+                        # by generation_tps, whose clock starts after token 1.
+                        prefill_end_ns = response_at_ns
+                    self._emit(
+                        ev.PrefillEnd(prompt_tokens=prompt_tokens),
+                        request_id,
+                        at_ns=prefill_end_ns,
+                    )
                     prefill_done = True
                 produced += 1
                 active_now = max(0, int(mx.get_active_memory()))
@@ -131,6 +170,7 @@ class LoupeInstrument:
                         active_memory_bytes=active_now,
                     ),
                     request_id,
+                    at_ns=response_at_ns,
                 )
                 raw_finish_reason = getattr(response, "finish_reason", None)
                 if raw_finish_reason:
@@ -142,30 +182,112 @@ class LoupeInstrument:
                     )
                 yield response
         except GeneratorExit:
-            self._emit(
-                ev.RequestEnd(output_tokens=produced, finish_reason="cancelled"),
-                request_id,
+            self._finish_request(
+                request_id=request_id,
+                output_tokens=produced,
+                finish_reason="cancelled",
+                decode_start_ns=decode_start_ns,
+                # Closing a Python generator happens after control was
+                # yielded to the consumer. Use the last runtime response
+                # receipt, not consumer think time, as the decode boundary.
+                ended_at_ns=last_response_at_ns,
             )
             raise
         except Exception as exc:
+            failure_at_ns = self._clock()
             self._emit(
                 ev.ErrorEvent(
                     code="generation_failed",
                     message=f"Generation failed ({type(exc).__name__})",
                 ),
                 request_id,
+                at_ns=failure_at_ns,
             )
-            self._emit(ev.RequestEnd(output_tokens=produced, finish_reason="error"), request_id)
+            self._finish_request(
+                request_id=request_id,
+                output_tokens=produced,
+                finish_reason="error",
+                decode_start_ns=decode_start_ns,
+                ended_at_ns=failure_at_ns,
+            )
             raise
-        self._emit(
-            ev.RequestEnd(output_tokens=produced, finish_reason=finish_reason),
-            request_id,
+        self._finish_request(
+            request_id=request_id,
+            output_tokens=produced,
+            finish_reason=finish_reason,
+            decode_start_ns=decode_start_ns,
+            ended_at_ns=last_response_at_ns,
         )
 
     def close(self) -> None:
-        self._writer.close()
+        if self._closed:
+            return
+        self._closed = True
+        # If this terminal event reaches the app, the producer-side drop count
+        # is exact for every preceding application event. If it does not, v2
+        # sequence gaps remain a lower bound and the app reports "unknown".
+        attempted = self._sequence
+        self._sequence += 1
 
-    def _emit(self, payload: Any, request_id: str | None = None) -> None:
+        def terminal(dropped: int) -> ev.Envelope:
+            return ev.Envelope(
+                ts=self._clock(),
+                run_id=self.run_id,
+                payload=ev.TransportSummary(
+                    attempted_events=attempted,
+                    producer_dropped_events=max(0, int(dropped)),
+                ),
+                seq=self._sequence,
+            )
+
+        finish = getattr(self._writer, "finish", None)
+        if callable(finish):
+            finish(terminal)
+        else:
+            # Custom synchronous sinks have no background drain that can
+            # change their counter between this read and the emit.
+            self._writer.emit(terminal(self._writer.dropped))
+            self._writer.close()
+
+    def _finish_request(
+        self,
+        *,
+        request_id: str,
+        output_tokens: int,
+        finish_reason: str,
+        decode_start_ns: int | None,
+        ended_at_ns: int | None = None,
+    ) -> None:
+        ended_at_ns = ended_at_ns if ended_at_ns is not None else self._clock()
+        duration = None
+        if output_tokens > 0 and decode_start_ns is not None and ended_at_ns > decode_start_ns:
+            duration = min(ended_at_ns - decode_start_ns, ev.MAX_UINT64)
+        self._emit(
+            ev.RequestEnd(
+                output_tokens=output_tokens,
+                finish_reason=finish_reason,
+                decode_duration_ns=duration,
+            ),
+            request_id,
+            at_ns=ended_at_ns,
+        )
+
+    def _emit(
+        self,
+        payload: Any,
+        request_id: str | None = None,
+        *,
+        at_ns: int | None = None,
+    ) -> None:
+        if self._closed:
+            return
+        self._sequence += 1
         self._writer.emit(
-            ev.Envelope(ts=now_ns(), run_id=self.run_id, payload=payload, request_id=request_id)
+            ev.Envelope(
+                ts=at_ns if at_ns is not None else self._clock(),
+                run_id=self.run_id,
+                payload=payload,
+                request_id=request_id,
+                seq=self._sequence,
+            )
         )

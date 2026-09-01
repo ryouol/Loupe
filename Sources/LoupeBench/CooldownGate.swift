@@ -13,12 +13,22 @@ public enum CooldownGate {
     public static func waitForNominal(
         states: AsyncStream<ThermalState>,
         timeout: Duration,
+        stableFor: Duration = .seconds(3),
         clock: ContinuousClock = ContinuousClock()
     ) async -> Outcome {
         await withTaskGroup(of: Outcome.self) { group in
             group.addTask {
-                for await state in states where state == .nominal {
-                    return .nominal
+                var nominalSince: ContinuousClock.Instant?
+                for await state in states {
+                    if state == .nominal {
+                        let now = clock.now
+                        if nominalSince == nil { nominalSince = now }
+                        if let nominalSince, now - nominalSince >= stableFor {
+                            return .nominal
+                        }
+                    } else {
+                        nominalSince = nil
+                    }
                 }
                 // Stream ended without reaching nominal: treat as timeout
                 // rather than spinning forever on a dead stream.

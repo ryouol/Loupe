@@ -12,6 +12,8 @@ public final class UnixSocketLineWriter: @unchecked Sendable {
     private let socketPath: String
     private var fd: Int32 = -1
     private var droppedCount = 0
+    private var nextConnectAttemptNs: UInt64 = 0
+    private static let reconnectBackoffNs: UInt64 = 500_000_000
 
     public var dropped: Int {
         lock.withLock { droppedCount }
@@ -19,22 +21,24 @@ public final class UnixSocketLineWriter: @unchecked Sendable {
 
     public init(socketPath: String) {
         self.socketPath = socketPath
-        lock.withLock { _ = connectLocked() }
     }
 
     public func send(_ line: Data) {
         lock.withLock {
             var payload = line
             payload.append(UInt8(ascii: "\n"))
-            if fd < 0 { _ = connectLocked() }
-            if fd >= 0, writeAllLocked(payload) { return }
+            if fd < 0, !connectLocked() {
+                droppedCount += 1
+                return
+            }
+            if writeAllLocked(payload) { return }
 
             // A short write leaves only an unterminated fragment on the old
-            // connection. Reconnect once and replay the complete line so
-            // startup races and app restarts do not silently lose the
-            // session_start that makes every later event meaningful.
+            // connection. Reconnect once and replay the complete line. If
+            // that bounded retry fails, sequence/summary accounting records
+            // the drop; no code claims the app observed a summary it did not.
             disconnectLocked()
-            if connectLocked(), writeAllLocked(payload) { return }
+            if connectLocked(ignoringBackoff: true), writeAllLocked(payload) { return }
             disconnectLocked()
             droppedCount += 1
         }
@@ -44,10 +48,15 @@ public final class UnixSocketLineWriter: @unchecked Sendable {
         lock.withLock { disconnectLocked() }
     }
 
-    private func connectLocked() -> Bool {
+    private func connectLocked(ignoringBackoff: Bool = false) -> Bool {
         if fd >= 0 { return true }
+        let now = DispatchTime.now().uptimeNanoseconds
+        guard ignoringBackoff || now >= nextConnectAttemptNs else { return false }
         let socketFD = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard socketFD >= 0 else { return false }
+        guard socketFD >= 0 else {
+            setConnectBackoff(after: now)
+            return false
+        }
         var enabled: Int32 = 1
         guard
             setsockopt(
@@ -55,6 +64,7 @@ public final class UnixSocketLineWriter: @unchecked Sendable {
                 socklen_t(MemoryLayout<Int32>.size)) == 0
         else {
             Darwin.close(socketFD)
+            setConnectBackoff(after: now)
             return false
         }
         var timeout = timeval(tv_sec: 1, tv_usec: 0)
@@ -66,6 +76,7 @@ public final class UnixSocketLineWriter: @unchecked Sendable {
         let pathBytes = Array(socketPath.utf8)
         guard pathBytes.count < MemoryLayout.size(ofValue: address.sun_path) else {
             Darwin.close(socketFD)
+            setConnectBackoff(after: now)
             return false
         }
         withUnsafeMutableBytes(of: &address.sun_path) { raw in
@@ -78,11 +89,19 @@ public final class UnixSocketLineWriter: @unchecked Sendable {
         }
         if connected == 0 {
             fd = socketFD
+            nextConnectAttemptNs = 0
             return true
         } else {
             Darwin.close(socketFD)
+            setConnectBackoff(after: now)
             return false
         }
+    }
+
+    private func setConnectBackoff(after now: UInt64) {
+        nextConnectAttemptNs =
+            now > UInt64.max - Self.reconnectBackoffNs
+            ? UInt64.max : now + Self.reconnectBackoffNs
     }
 
     private func writeAllLocked(_ payload: Data) -> Bool {

@@ -52,6 +52,21 @@ enum LoupeSchema {
             try db.create(indexOn: "inference_events", columns: ["run_id", "ts_ns"])
         }
 
+        migrator.registerMigration("v2-acquisition-integrity") { db in
+            try db.alter(table: "system_samples") { table in
+                table.add(column: "acquisition_sequence", .integer)
+            }
+            try db.alter(table: "inference_events") { table in
+                table.add(column: "protocol_version", .integer).notNull().defaults(to: 1)
+                table.add(column: "sequence", .integer)
+            }
+            try db.create(table: "acquisition_metadata") { table in
+                table.column("run_id", .text).primaryKey()
+                    .references("runs", onDelete: .cascade)
+                table.column("metadata_json", .text).notNull()
+            }
+        }
+
         return migrator
     }
 }

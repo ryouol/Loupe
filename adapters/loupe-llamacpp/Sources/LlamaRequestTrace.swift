@@ -1,7 +1,7 @@
 import Foundation
 import LoupeCore
 
-/// Maps one streamed `/completion` exchange onto protocol-v1 events.
+/// Maps one streamed `/completion` exchange onto protocol-v2-capable events.
 /// Per-request truth comes from the server's own `timings` object (the spec
 /// pins this): prefill_end sits at request_start + prompt_ms rather than at
 /// first-chunk arrival, which would fold network latency into TTFT.
@@ -22,7 +22,7 @@ public enum LlamaRequestTrace {
             timings.predictedMs.isFinite, timings.predictedMs >= 0,
             timings.predictedPerSecond.isFinite, timings.predictedPerSecond >= 0
         else {
-            return [
+            return sequenced([
                 EventEnvelope(
                     ts: requestStartNs, runId: runId, requestId: requestId,
                     payload: .requestStart(RequestStartPayload(promptTokens: nil))),
@@ -38,12 +38,20 @@ public enum LlamaRequestTrace {
                     requestId: requestId,
                     payload: .requestEnd(
                         RequestEndPayload(outputTokens: 0, finishReason: "error"))),
-            ]
+            ])
         }
 
         let promptTokens = UInt32(clamping: timings.promptN)
         let promptDurationNs = nanoseconds(milliseconds: timings.promptMs)
         let predictedDurationNs = nanoseconds(milliseconds: timings.predictedMs)
+        // llama.cpp's predicted_ms is the runtime's full generation window,
+        // including the first predicted token. This is the same boundary
+        // Loupe derives for MLX (prefill end → request end). The rate is a
+        // consistency fallback only for older servers that report zero ms.
+        let measuredDecodeDurationNs = decodeDuration(
+            outputTokens: timings.predictedN,
+            milliseconds: timings.predictedMs,
+            tokensPerSecond: timings.predictedPerSecond)
         let prefillEndNs = adding(promptDurationNs, to: requestStartNs)
 
         var events: [EventEnvelope] = [
@@ -87,8 +95,21 @@ public enum LlamaRequestTrace {
                 payload: .requestEnd(
                     RequestEndPayload(
                         outputTokens: UInt32(clamping: timings.predictedN),
-                        finishReason: chunks.last?.stop == true ? "stop" : "length"))))
-        return events
+                        finishReason: chunks.last?.stop == true ? "stop" : "length",
+                        decodeDurationNs: measuredDecodeDurationNs))))
+        return sequenced(events)
+    }
+
+    /// Standalone traces remain valid protocol-v2 lines in tests and file
+    /// sinks. The executable replaces these request-local sequence numbers
+    /// with its one session-wide sequence immediately before socket output.
+    private static func sequenced(_ events: [EventEnvelope]) -> [EventEnvelope] {
+        events.enumerated().map { index, envelope in
+            EventEnvelope(
+                version: EventProtocol.version, sequence: UInt64(index + 1),
+                ts: envelope.ts, runId: envelope.runId,
+                requestId: envelope.requestId, payload: envelope.payload)
+        }
     }
 
     private static func nanoseconds(milliseconds: Double) -> UInt64 {
@@ -100,5 +121,21 @@ public enum LlamaRequestTrace {
 
     private static func adding(_ amount: UInt64, to value: UInt64) -> UInt64 {
         value <= UInt64.max - amount ? value + amount : UInt64.max
+    }
+
+    private static func decodeDuration(
+        outputTokens: Int, milliseconds: Double, tokensPerSecond: Double
+    ) -> UInt64? {
+        guard outputTokens > 0 else {
+            return nil
+        }
+        if milliseconds.isFinite, milliseconds > 0 {
+            return nanoseconds(milliseconds: milliseconds)
+        }
+        guard tokensPerSecond.isFinite, tokensPerSecond > 0 else { return nil }
+        let value = Double(outputTokens) / tokensPerSecond * 1_000_000_000
+        guard value.isFinite, value > 0 else { return nil }
+        guard value < Double(UInt64.max) else { return UInt64.max }
+        return UInt64(value)
     }
 }

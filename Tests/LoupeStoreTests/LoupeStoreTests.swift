@@ -292,12 +292,33 @@ final class LoupeStoreTests: XCTestCase {
         ])
 
         let replayDirectory = directory.appendingPathComponent("replays")
-        let pair = try await store.exportReplayPair(to: replayDirectory)
-        XCTAssertTrue(pair.isComplete)
-        XCTAssertEqual(try pair.readEvents().count, 1)
-        XCTAssertEqual(try pair.readSystemSamples().count, 1)
+        let acquisition = SessionAcquisitionMetadata(
+            eventLosses: AcquisitionLossCount(
+                exact: 2, lowerBound: 2, breakdown: ["producer_reported": 2]),
+            telemetryLosses: AcquisitionLossCount(
+                exact: nil, lowerBound: 1, breakdown: ["event_buffer": 1]))
+        try await store.setAcquisitionMetadata(acquisition)
+        let pair = try await store.exportReplayPair(
+            to: replayDirectory, acquisitionMetadata: acquisition)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: pair.eventsURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: pair.systemURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: pair.metadataURL.path))
+        let decodedEvents = EventLineDecoder().decodeLines(
+            try Data(contentsOf: pair.eventsURL))
+        XCTAssertEqual(decodedEvents.envelopes.count, 1)
+        XCTAssertEqual(decodedEvents.drops.total, 0)
+        let decodedSamples = try Data(contentsOf: pair.systemURL)
+            .split(separator: UInt8(ascii: "\n"))
+            .compactMap { SystemSampleWireDecoder.decode(Data($0)) }
+        XCTAssertEqual(decodedSamples.count, 1)
+        let storedAcquisition = try await store.acquisitionMetadata()
+        XCTAssertEqual(storedAcquisition, acquisition)
+        XCTAssertEqual(
+            try JSONDecoder().decode(
+                SessionAcquisitionMetadata.self, from: Data(contentsOf: pair.metadataURL)),
+            acquisition)
 
-        for url in [pair.eventsURL, pair.systemURL] {
+        for url in [pair.eventsURL, pair.systemURL, pair.metadataURL] {
             var metadata = stat()
             XCTAssertEqual(lstat(url.path, &metadata), 0)
             XCTAssertEqual(metadata.st_mode & 0o777, 0o600)

@@ -160,6 +160,10 @@ final class LoupeLlamaCppTests: XCTestCase {
         }
         XCTAssertEqual(end.outputTokens, 25)
         XCTAssertEqual(end.finishReason, "stop")
+        XCTAssertNotNil(end.decodeDurationNs)
+        XCTAssertEqual(
+            SessionMetrics.perRequest(events: events).first?.decodeTokensPerSecond ?? -1,
+            220.32, accuracy: 0.01)
 
         // The whole trace validates against the wire contract.
         let encoder = EventLineEncoder()
@@ -198,6 +202,53 @@ final class LoupeLlamaCppTests: XCTestCase {
 
         XCTAssertEqual(events.map(\.ts), events.map(\.ts).sorted())
         XCTAssertEqual(events.last?.ts, UInt64.max)
+    }
+
+    func testOneTokenEarlyStopPreservesRuntimeReportedRate() {
+        let timings = LlamaTimings(
+            promptN: 8, promptMs: 100, predictedN: 1, predictedMs: 50,
+            predictedPerSecond: 20)
+        let chunks = [
+            LlamaCompletionChunk(content: "x", stop: true, timings: timings)
+        ]
+        let events = LlamaRequestTrace.events(
+            runId: "r", requestId: "q", requestStartNs: 1_000,
+            chunkArrivalsNs: [1_001], chunks: chunks,
+            kv: KVCacheModel(layers: 1, headDimension: 1, kvHeads: 1))
+
+        let metric = SessionMetrics.perRequest(events: events).first
+        XCTAssertEqual(metric?.outputTokens, 1)
+        XCTAssertEqual(metric?.decodeDurationNs, 50_000_000)
+        XCTAssertEqual(metric?.decodeTokensPerSecond ?? -1, 20, accuracy: 0.001)
+    }
+
+    func testMissingRuntimeMillisecondsFallsBackToReportedRate() {
+        let timings = LlamaTimings(
+            promptN: 8, promptMs: 100, predictedN: 1, predictedMs: 0,
+            predictedPerSecond: 25)
+        let events = LlamaRequestTrace.events(
+            runId: "r", requestId: "q", requestStartNs: 1_000,
+            chunkArrivalsNs: [1_001],
+            chunks: [LlamaCompletionChunk(content: "x", stop: true, timings: timings)],
+            kv: KVCacheModel(layers: 1, headDimension: 1, kvHeads: 1))
+
+        let metric = SessionMetrics.perRequest(events: events).first
+        XCTAssertEqual(metric?.decodeDurationNs, 40_000_000)
+        XCTAssertEqual(metric?.decodeTokensPerSecond ?? -1, 25, accuracy: 0.001)
+    }
+
+    func testRuntimeRateFallbackSaturatesWithoutConversionTrap() {
+        let timings = LlamaTimings(
+            promptN: 1, promptMs: 1, predictedN: 1, predictedMs: 0,
+            predictedPerSecond: .leastNonzeroMagnitude)
+        let events = LlamaRequestTrace.events(
+            runId: "r", requestId: "q", requestStartNs: 1,
+            chunkArrivalsNs: [2],
+            chunks: [LlamaCompletionChunk(content: "x", stop: true, timings: timings)],
+            kv: KVCacheModel(layers: 1, headDimension: 1, kvHeads: 1))
+
+        XCTAssertEqual(
+            SessionMetrics.perRequest(events: events).first?.decodeDurationNs, UInt64.max)
     }
 
     // MARK: PID resolution
@@ -269,6 +320,19 @@ final class LoupeLlamaCppTests: XCTestCase {
         let count = read(client, &bytes, bytes.count)
         XCTAssertEqual(String(decoding: bytes.prefix(max(0, count)), as: UTF8.self), "hello\n")
         XCTAssertEqual(writer.dropped, 0)
+        writer.close()
+    }
+
+    func testSocketWriterMissingListenerHasBoundedRetryCost() {
+        let writer = UnixSocketLineWriter(
+            socketPath: "/tmp/loupe-llama-missing-\(UUID().uuidString.prefix(8)).sock")
+        let clock = ContinuousClock()
+        let start = clock.now
+        for _ in 0..<10_000 { writer.send(Data("line".utf8)) }
+        let elapsed = clock.now - start
+
+        XCTAssertEqual(writer.dropped, 10_000)
+        XCTAssertLessThan(elapsed, .seconds(1))
         writer.close()
     }
 }

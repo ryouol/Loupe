@@ -1,7 +1,7 @@
-"""Event protocol v1 — Python mirror of ``protocol/events.schema.json``.
+"""Event protocol v2 — Python mirror of ``protocol/events.schema.json``.
 
 Drift against the Swift types is caught by cross-language round-trip and
-schema-conformance tests over the same committed examples.
+schema-conformance tests. Legacy v1 recordings remain decode-compatible.
 """
 
 from __future__ import annotations
@@ -11,7 +11,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, ClassVar, Union, get_args
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
+LEGACY_PROTOCOL_VERSION = 1
 # Shared with the schema (x-limits.maxLineBytes) and the Swift decoder;
 # conformance tests in both languages pin the three together.
 MAX_LINE_BYTES = 65536
@@ -243,17 +244,47 @@ class RequestEnd:
     EVENT: ClassVar[str] = "request_end"
     output_tokens: int
     finish_reason: str
+    decode_duration_ns: int | None = None
 
     def to_json_payload(self) -> dict[str, Any]:
-        return {"outputTokens": self.output_tokens, "finishReason": self.finish_reason}
+        payload: dict[str, Any] = {
+            "outputTokens": self.output_tokens,
+            "finishReason": self.finish_reason,
+        }
+        if self.decode_duration_ns is not None:
+            payload["decodeDurationNs"] = self.decode_duration_ns
+        return payload
 
     @classmethod
     def from_json_payload(cls, obj: dict[str, Any]) -> "RequestEnd":
-        _reject_extra_keys(obj, {"outputTokens", "finishReason"})
+        _reject_extra_keys(obj, {"outputTokens", "finishReason", "decodeDurationNs"})
         return cls(
             output_tokens=_req_uint(obj, "outputTokens", MAX_UINT32),
             finish_reason=_bounded_str(obj, "finishReason", 64),
+            decode_duration_ns=_opt_uint(obj, "decodeDurationNs"),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class TransportSummary:
+    EVENT: ClassVar[str] = "transport_summary"
+    attempted_events: int
+    producer_dropped_events: int
+
+    def to_json_payload(self) -> dict[str, Any]:
+        return {
+            "attemptedEvents": self.attempted_events,
+            "producerDroppedEvents": self.producer_dropped_events,
+        }
+
+    @classmethod
+    def from_json_payload(cls, obj: dict[str, Any]) -> "TransportSummary":
+        _reject_extra_keys(obj, {"attemptedEvents", "producerDroppedEvents"})
+        attempted = _req_uint(obj, "attemptedEvents")
+        dropped = _req_uint(obj, "producerDroppedEvents")
+        if dropped > attempted:
+            raise _payload_error("producerDroppedEvents")
+        return cls(attempted_events=attempted, producer_dropped_events=dropped)
 
 
 @dataclass(frozen=True, slots=True)
@@ -283,6 +314,7 @@ Payload = Union[
     PrefillEnd,
     DecodeTick,
     RequestEnd,
+    TransportSummary,
     ErrorEvent,
 ]
 
@@ -298,6 +330,7 @@ class Envelope:
     run_id: str
     payload: Payload
     request_id: str | None = None
+    seq: int | None = 1
     v: int = field(default=PROTOCOL_VERSION)
 
     @property
@@ -314,6 +347,8 @@ def encode_line(envelope: Envelope) -> bytes:
         "event": envelope.event,
         "payload": envelope.payload.to_json_payload(),
     }
+    if envelope.seq is not None:
+        obj["seq"] = envelope.seq
     if envelope.request_id is not None:
         obj["requestId"] = envelope.request_id
     return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -340,7 +375,7 @@ def decode_line(raw: bytes | str) -> Envelope:
         raise EventDropped(DropReason.MALFORMED_JSON, "v is not an integer")
     if version is None:
         raise EventDropped(DropReason.INVALID_ENVELOPE, "missing v")
-    if version != PROTOCOL_VERSION:
+    if version not in {LEGACY_PROTOCOL_VERSION, PROTOCOL_VERSION}:
         raise EventDropped(DropReason.UNSUPPORTED_VERSION, str(version))
 
     event = obj.get("event")
@@ -352,8 +387,17 @@ def decode_line(raw: bytes | str) -> Envelope:
     if payload_type is None:
         raise EventDropped(DropReason.UNKNOWN_EVENT, event)
 
-    if not set(obj).issubset({"v", "ts", "runId", "requestId", "event", "payload"}):
+    allowed_envelope = {"v", "ts", "runId", "requestId", "event", "payload"}
+    if version == PROTOCOL_VERSION:
+        allowed_envelope.add("seq")
+    if not set(obj).issubset(allowed_envelope):
         raise EventDropped(DropReason.INVALID_ENVELOPE, "unknown field")
+    seq = obj.get("seq")
+    if version == PROTOCOL_VERSION:
+        if not isinstance(seq, int) or isinstance(seq, bool) or not 1 <= seq <= MAX_UINT64:
+            raise EventDropped(DropReason.INVALID_ENVELOPE, "seq")
+    elif seq is not None or event == TransportSummary.EVENT:
+        raise EventDropped(DropReason.INVALID_ENVELOPE, "v1 extension")
 
     ts = obj.get("ts")
     if not isinstance(ts, int) or isinstance(ts, bool) or ts < 0 or ts > MAX_UINT64:
@@ -370,9 +414,16 @@ def decode_line(raw: bytes | str) -> Envelope:
     payload_obj = obj.get("payload")
     if not isinstance(payload_obj, dict):
         raise EventDropped(DropReason.INVALID_PAYLOAD, "payload is not an object")
+    if version == LEGACY_PROTOCOL_VERSION and event == RequestEnd.EVENT:
+        _reject_extra_keys(payload_obj, {"outputTokens", "finishReason"})
     payload = payload_type.from_json_payload(payload_obj)
+    if isinstance(payload, RequestEnd):
+        if payload.decode_duration_ns is not None and payload.decode_duration_ns == 0:
+            raise EventDropped(DropReason.INVALID_PAYLOAD, "decodeDurationNs")
 
     if event in REQUEST_SCOPED_EVENTS and request_id is None:
         raise EventDropped(DropReason.MISSING_REQUEST_ID, event)
 
-    return Envelope(ts=ts, run_id=run_id, payload=payload, request_id=request_id)
+    return Envelope(
+        ts=ts, run_id=run_id, payload=payload, request_id=request_id, seq=seq, v=version
+    )

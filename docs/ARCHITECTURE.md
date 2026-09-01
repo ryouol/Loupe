@@ -7,7 +7,7 @@ available to an unprivileged process.
 
 ```text
 MLX / llama.cpp adapter (user UID)
-        │ protocol-v1 NDJSON
+        │ protocol-v2 NDJSON: monotonic seq + terminal loss summary
         ▼
 owner-only Unix socket in ~/Library/Application Support/Loupe/runtime
         │ same-UID + bounded + schema/sequence/PID validation
@@ -17,7 +17,7 @@ SessionRecorder actor (app, user UID)
         ├── optional helper GPU/power fields merged onto the local row clock
         ├── SQLite: opaque UUID filename, 0700 directory, 0600 files
         ├── lifecycle manifest: wait/record/degrade/disconnect/reconnect/stop
-        └── portable NDJSON pair for replay and evidence export
+        └── portable NDJSON pair + acquisition metadata for replay/export
 
 signed app ── authenticated XPC ──► optional root telemetry-only helper
 ```
@@ -47,8 +47,9 @@ an owner-only manifest so a user can see what happened after relaunch.
 5. `reconnecting`: accept a same-user reconnection and validate its next event.
 6. `degraded` or `denied`: persist and show resource, storage, identity, or
    protocol failures rather than silently pretending the trace is complete.
-7. `stopped`: drain accepted socket commands, end SQLite state, and materialize
-   the portable replay pair through bounded-memory owner-only temporary files.
+7. `stopped`: drain accepted socket commands, close telemetry accounting, end
+   SQLite state, and materialize the portable replay bundle through
+   bounded-memory owner-only temporary files.
 
 An unclean app exit leaves SQLite rows and the manifest intact. History marks a
 non-terminal manifest as `interrupted`; it does not invent a successful stop.
@@ -63,7 +64,9 @@ non-terminal manifest as `interrupted`; it does not invent a successful stop.
   a 16-connection default and hard maximum of 64) plus bounded command/event
   streams;
 - a 64 KiB unterminated-line cap;
-- strict v1 envelope and payload keys, lengths, positive PID, and request IDs;
+- strict v2 envelope and payload keys, lengths, positive PID, request IDs,
+  monotonic producer sequence, and terminal transport summary (with replay-only
+  v1 compatibility);
 - an expected run ID, event sequencing/timestamps, monotonic decode tokens, and a claimed
   PID owned by the same user before process telemetry begins.
 
@@ -89,7 +92,10 @@ exporting any root-owned object, its listener requires:
   retained;
 - the live producer keeps its newest 64 rows and the app receiver keeps its
   newest 256 validated rows, so a signed but faulty or stalled client cannot
-  grow telemetry buffers without bound.
+  grow telemetry buffers without bound;
+- bounded event/sample streams inspect every `.dropped` yield result. Telemetry
+  sequences and a terminal helper summary carry loss across XPC; absence of
+  that summary is unknown rather than zero.
 
 Unsigned/ad-hoc builds have no team identifier, fail closed, and the app
 disables helper installation. Tests use an explicit in-process policy only for
@@ -105,9 +111,17 @@ tables, and visual lanes; package power is never attributed to one PID.
 ## Replay and evidence
 
 Every completed recording produces `<opaque-id>.ndjson` plus
-`<opaque-id>.system.ndjson`. Replay parses the pair independently with counted
-drops, hard file/row limits, unified clocks, and LTTB-capped charts. Evidence
-export includes SHA-256 for both source files, request metrics, findings,
-source counts, and drop counts; CSV cells cannot execute spreadsheet formulas.
+`<opaque-id>.system.ndjson`, plus `<opaque-id>.metadata.json` for protocol-v2
+acquisition integrity. Replay parses the data files independently with counted
+parser drops, hard file/row limits, and unified clocks. Analysis retains the
+union of significant indices across memory, swap, process RSS/CPU, GPU%, GPU
+watts, and package watts so a spike in one signal cannot be erased by another
+flat signal; unavailable lanes remain hidden.
+
+Evidence export re-reads and SHA-256 hashes every present source and refuses a
+source that changed after load. JSON and CSV contain the same filenames,
+hashes, counts, duration, thermal states, replay-parser drops, and acquisition
+exact/lower-bound/breakdown fields. Recording acquisition loss and replay
+parser corruption stay separate. CSV cells cannot execute spreadsheet formulas.
 The durable-to-portable export streams one validated row at a time rather than
 materializing a complete worst-case session in memory.

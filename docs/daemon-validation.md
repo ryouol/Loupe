@@ -26,7 +26,7 @@ same-team/active-console policy.
    `Contents/Library/LaunchDaemons/ai.squint.loupe.daemon.plist`; its filename,
    `Label`, Mach service, and source constants agree.
 3. From **Telemetry**, click **Install**, approve under System Settings → Login
-   Items, and refresh. The handshake must show version 0.2.0 and protocol v1;
+   Items, and refresh. The handshake must show version 0.2.0 and protocol v2;
    samples must advance.
 4. Run a recording. GPU/power fields should appear when IOReport resolves;
    absent channels must remain absent, never zero-filled.
@@ -37,8 +37,16 @@ same-team/active-console policy.
 7. Send an unsupported protocol version from an allowed test client. The reply
    must be empty and `startSampleStream` must do nothing.
 8. Reboot, relaunch, refresh, and verify approval survives and streaming resumes.
-9. Uninstall in the app; confirm the service disappears from `launchctl`.
-10. Repeat on the supported Apple Silicon matrix. Record chip, macOS build,
+9. Stall the app-side consumer long enough to force bounded helper and receiver
+   backpressure, then stop normally. Confirm the session reports a nonzero
+   telemetry acquisition count and that a terminal summary closes the exact
+   window. Kill the helper before its summary and confirm the UI/export says
+   unknown with any observed sequence-gap lower bound, never zero.
+10. Stop, quit, and relaunch. Confirm History and JSON/CSV preserve the same
+    acquisition exact/lower-bound values while replay parser drops remain a
+    separate field.
+11. Uninstall in the app; confirm the service disappears from `launchctl`.
+12. Repeat on the supported Apple Silicon matrix. Record chip, macOS build,
     resolved IOReport channels, result, and logs in the release evidence.
 
 No step in this document has been completed merely because the source exists.

@@ -5,7 +5,7 @@ import time
 import uuid
 
 import pytest
-from loupe_mlx.events import Envelope, ModelLoadStart, decode_line
+from loupe_mlx.events import Envelope, ModelLoadStart, TransportSummary, decode_line
 from loupe_mlx.socket_writer import SocketEventWriter
 
 
@@ -82,7 +82,11 @@ def test_file_writer_feeds_the_same_instrument(tmp_path) -> None:
 
     lines = path.read_bytes().splitlines()
     decoded = [decode_line(line) for line in lines]
-    assert [envelope.event for envelope in decoded] == ["session_start", "clock_sync"]
+    assert [envelope.event for envelope in decoded] == [
+        "session_start",
+        "clock_sync",
+        "transport_summary",
+    ]
     assert all(envelope.run_id == "r-file" for envelope in decoded)
     assert os.stat(path).st_mode & 0o777 == 0o600
 
@@ -140,3 +144,46 @@ def test_writer_reconnects_after_listener_appears() -> None:
     writer.close()
     assert [decode_line(line).ts for line in server.lines] == [1, 2]
     assert writer.dropped == 0
+
+
+def test_delivery_retry_is_bounded_and_counted() -> None:
+    writer = SocketEventWriter(
+        "/tmp/loupe-bounded-retry-not-listening.sock",
+        max_queued=8,
+        max_delivery_seconds=0.05,
+    )
+    writer.emit(_envelope(1))
+    deadline = time.monotonic() + 1.0
+    while writer.dropped == 0 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    writer.close()
+    assert writer.dropped >= 1
+
+
+def test_terminal_summary_is_created_after_prior_queue_drops_settle() -> None:
+    server = UnixLineServer()
+    writer = SocketEventWriter(server.path, max_queued=8)
+    deadline = time.monotonic() + 2
+    while not writer.connected and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert writer.connected
+
+    for ts in range(10_000):
+        writer.emit(_envelope(ts))
+    writer.finish(
+        lambda dropped: Envelope(
+            ts=10_001,
+            run_id="r-w",
+            payload=TransportSummary(
+                attempted_events=10_000,
+                producer_dropped_events=dropped,
+            ),
+            seq=10_001,
+        )
+    )
+    server.wait_for(10_001 - writer.dropped)
+
+    summary = decode_line(server.lines[-1]).payload
+    assert isinstance(summary, TransportSummary)
+    assert summary.producer_dropped_events == writer.dropped
+    assert summary.producer_dropped_events > 0

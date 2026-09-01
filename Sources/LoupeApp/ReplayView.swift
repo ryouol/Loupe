@@ -65,7 +65,19 @@ public struct ReplayView: View {
                         if !model.gpuChartPoints.isEmpty {
                             gpuBand
                         }
-                        processBand
+                        if !model.gpuPowerChartPoints.isEmpty
+                            || !model.packagePowerChartPoints.isEmpty
+                        {
+                            powerBand
+                        }
+                        if model.processChartPoints.contains(where: { $0.processRSSGB != nil }) {
+                            processMemoryBand
+                        }
+                        if model.processChartPoints.contains(where: {
+                            $0.processCPUPercent != nil
+                        }) {
+                            processCPUBand
+                        }
                         requestTable
                         eventTable
                     }
@@ -129,7 +141,12 @@ public struct ReplayView: View {
                 value: String(format: "%.1f s", model.durationSeconds), label: "duration",
                 symbol: "clock")
             StatChip(
-                value: "\(model.sampleDrops + model.eventDrops)", label: "dropped",
+                value: model.acquisitionLossDisplay, label: "acquisition loss",
+                symbol: model.acquisitionLossDisplay == "0"
+                    ? "checkmark.seal" : "exclamationmark.triangle",
+                tint: model.acquisitionLossDisplay == "0" ? .green : .orange)
+            StatChip(
+                value: "\(model.sampleDrops + model.eventDrops)", label: "replay parser",
                 symbol: model.sampleDrops + model.eventDrops == 0
                     ? "checkmark.seal" : "exclamationmark.triangle",
                 tint: model.sampleDrops + model.eventDrops == 0 ? .green : .red)
@@ -271,7 +288,7 @@ public struct ReplayView: View {
             .chartOverlay { proxy in ScrubOverlay(model: model, proxy: proxy) }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("System memory and swap timeline")
-            .accessibilityValue("\(model.chartPoints.count) plotted samples")
+            .accessibilityValue(model.memoryAccessibilitySummary)
         } label: {
             Label("System-wide: memory and swap", systemImage: "desktopcomputer")
         }
@@ -282,25 +299,13 @@ public struct ReplayView: View {
         GroupBox {
             Chart {
                 ForEach(model.gpuChartPoints) { point in
-                    if let busy = point.gpuBusyPercent {
-                        LineMark(
-                            x: .value("s", point.seconds),
-                            y: .value("v", busy),
-                            series: .value("Series", "GPU busy %")
-                        )
-                        .foregroundStyle(by: .value("Series", "GPU busy %"))
-                    }
-                    if let watts = point.packagePowerWatts {
-                        LineMark(
-                            x: .value("s", point.seconds),
-                            y: .value("v", watts),
-                            series: .value("Series", "Package W")
-                        )
-                        .foregroundStyle(by: .value("Series", "Package W"))
-                    }
+                    LineMark(
+                        x: .value("s", point.seconds),
+                        y: .value("GPU busy %", point.gpuBusyPercent ?? 0)
+                    )
+                    .foregroundStyle(.green)
                 }
             }
-            .chartForegroundStyleScale(["GPU busy %": Color.green, "Package W": Color.red])
             .chartYAxis(.hidden)
             .chartXAxis(.hidden)
             .chartXScale(domain: xDomain)
@@ -308,15 +313,54 @@ public struct ReplayView: View {
             .frame(height: 110)
             .chartOverlay { proxy in ScrubOverlay(model: model, proxy: proxy) }
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("GPU utilization and package power timeline")
-            .accessibilityValue("\(model.gpuChartPoints.count) plotted samples")
+            .accessibilityLabel("GPU utilization timeline in percent")
+            .accessibilityValue(model.gpuUtilizationAccessibilitySummary)
         } label: {
-            Label("System-wide: GPU and power", systemImage: "bolt")
+            Label(
+                "System-wide: GPU utilization (%)", systemImage: "gauge.with.dots.needle.50percent")
         }
         .backgroundStyle(.blue.opacity(0.05))
     }
 
-    private var processBand: some View {
+    private var powerBand: some View {
+        GroupBox {
+            Chart {
+                ForEach(model.gpuPowerChartPoints) { point in
+                    LineMark(
+                        x: .value("s", point.seconds),
+                        y: .value("W", point.gpuPowerWatts ?? 0),
+                        series: .value("Series", "GPU power")
+                    )
+                    .foregroundStyle(by: .value("Series", "GPU power"))
+                }
+                ForEach(model.packagePowerChartPoints) { point in
+                    LineMark(
+                        x: .value("s", point.seconds),
+                        y: .value("W", point.packagePowerWatts ?? 0),
+                        series: .value("Series", "Package power")
+                    )
+                    .foregroundStyle(by: .value("Series", "Package power"))
+                }
+            }
+            .chartForegroundStyleScale([
+                "GPU power": Color.orange, "Package power": Color.red,
+            ])
+            .chartYAxis(.hidden)
+            .chartXAxis(.hidden)
+            .chartXScale(domain: xDomain)
+            .chartLegend(position: .top, alignment: .trailing)
+            .frame(height: 110)
+            .chartOverlay { proxy in ScrubOverlay(model: model, proxy: proxy) }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("System power timeline in watts")
+            .accessibilityValue(model.powerAccessibilitySummary)
+        } label: {
+            Label("System-wide: power (W)", systemImage: "bolt")
+        }
+        .backgroundStyle(.orange.opacity(0.06))
+    }
+
+    private var processMemoryBand: some View {
         GroupBox {
             Chart {
                 ForEach(model.processChartPoints) { point in
@@ -333,11 +377,37 @@ public struct ReplayView: View {
             .chartOverlay { proxy in ScrubOverlay(model: model, proxy: proxy) }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Observed process memory timeline")
-            .accessibilityValue("\(model.processChartPoints.count) plotted samples")
+            .accessibilityValue(model.processMemoryAccessibilitySummary)
         } label: {
             Label("Observed process: RSS", systemImage: "app.badge")
         }
         .backgroundStyle(.purple.opacity(0.06))
+    }
+
+    private var processCPUBand: some View {
+        GroupBox {
+            Chart {
+                ForEach(model.processChartPoints) { point in
+                    if let cpu = point.processCPUPercent {
+                        LineMark(
+                            x: .value("s", point.seconds),
+                            y: .value("CPU %", cpu)
+                        )
+                        .foregroundStyle(.teal)
+                    }
+                }
+            }
+            .chartYAxis(.hidden)
+            .chartXScale(domain: xDomain)
+            .frame(height: 110)
+            .chartOverlay { proxy in ScrubOverlay(model: model, proxy: proxy) }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Observed process CPU timeline in percent")
+            .accessibilityValue(model.processCPUAccessibilitySummary)
+        } label: {
+            Label("Observed process: CPU (%)", systemImage: "cpu")
+        }
+        .backgroundStyle(.teal.opacity(0.06))
     }
 
     // MARK: - Tables
@@ -427,6 +497,15 @@ private struct ScrubReadoutBar: View {
                 }
                 if let gpu = readout.gpuBusyPercent {
                     value("gpu", String(format: "%.0f%%", gpu))
+                }
+                if let cpu = readout.processCPUPercent {
+                    value("cpu", String(format: "%.0f%%", cpu))
+                }
+                if let watts = readout.gpuPowerWatts {
+                    value("gpu power", String(format: "%.2f W", watts))
+                }
+                if let watts = readout.packagePowerWatts {
+                    value("package", String(format: "%.2f W", watts))
                 }
                 value("request", readout.activeRequestId ?? "None")
                 Spacer()

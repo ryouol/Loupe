@@ -11,6 +11,10 @@ struct XPCReceiverBox: @unchecked Sendable {
     func deliver(_ data: Data) {
         receiver.deliver(sampleData: data)
     }
+
+    func deliverSummary(_ data: Data) {
+        receiver.deliver(summaryData: data)
+    }
 }
 
 private final class ConnectionLease: @unchecked Sendable {
@@ -54,26 +58,45 @@ private final class ConnectionLimiter: @unchecked Sendable {
 
 /// Streaming state for one connection, isolated from NSXPC callback threads.
 actor SampleBroadcaster {
-    private var task: Task<Void, Never>?
+    private var task: Task<Data?, Never>?
 
     func start(source: any TelemetrySource, box: XPCReceiverBox) async {
-        await stop()
+        _ = await stop()
         task = Task {
             let encoder = JSONEncoder()
+            var encodingDrops = 0
             for await sample in await source.stream() {
-                if Task.isCancelled { break }
+                // Preserve any row already accepted from the source. The
+                // next iterator step observes cancellation; dropping here
+                // would create an unobservable transport loss.
                 if let data = try? encoder.encode(sample) {
                     box.deliver(data)
+                } else if encodingDrops < Int.max {
+                    encodingDrops += 1
                 }
             }
+            let sourceStats = await source.acquisitionStats()
+            let stats = TelemetryAcquisitionStats(
+                droppedSamples:
+                    sourceStats.droppedSamples > Int.max - encodingDrops
+                    ? Int.max : sourceStats.droppedSamples + encodingDrops,
+                sequenceGapLowerBound: sourceStats.sequenceGapLowerBound,
+                malformedSamples: sourceStats.malformedSamples,
+                complete: sourceStats.complete,
+                sourceWasActive: sourceStats.sourceWasActive)
+            if let data = try? encoder.encode(stats) {
+                box.deliverSummary(data)
+                return data
+            }
+            return nil
         }
     }
 
-    func stop() async {
+    func stop() async -> Data? {
         let active = task
         task = nil
         active?.cancel()
-        await active?.value
+        return await active?.value
     }
 }
 
@@ -86,7 +109,7 @@ actor SampleBroadcaster {
 public final class DaemonXPCService: NSObject, LoupeDaemonXPCProtocol, @unchecked Sendable {
     private enum Command: Sendable {
         case start(any TelemetrySource, XPCReceiverBox)
-        case stop
+        case stop(@Sendable (Data) -> Void)
     }
 
     private let box: XPCReceiverBox?
@@ -114,10 +137,11 @@ public final class DaemonXPCService: NSObject, LoupeDaemonXPCProtocol, @unchecke
                 switch command {
                 case .start(let source, let box):
                     await broadcaster.start(source: source, box: box)
-                case .stop: await broadcaster.stop()
+                case .stop(let reply):
+                    reply(await broadcaster.stop() ?? Data())
                 }
             }
-            await broadcaster.stop()
+            _ = await broadcaster.stop()
         }
     }
 
@@ -146,8 +170,8 @@ public final class DaemonXPCService: NSObject, LoupeDaemonXPCProtocol, @unchecke
         enqueue(.start(source, box))
     }
 
-    public func stopSampleStream() {
-        enqueue(.stop)
+    public func stopSampleStream(reply: @escaping @Sendable (Data) -> Void) {
+        enqueue(.stop(reply))
     }
 
     /// Ends streaming and the pump; called when the connection dies.

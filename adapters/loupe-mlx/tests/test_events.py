@@ -27,7 +27,7 @@ EXPECTED_MALFORMED_REASONS = [
 
 
 def test_example_file_shape(valid_lines, malformed_lines) -> None:
-    assert len(valid_lines) == 14, "example file changed without updating tests"
+    assert len(valid_lines) == 16, "example file changed without updating tests"
     assert len(malformed_lines) == len(EXPECTED_MALFORMED_REASONS)
 
 
@@ -44,8 +44,12 @@ def test_examples_cover_every_event(valid_lines) -> None:
 
 
 def test_extreme_unsigned_values_survive(valid_lines) -> None:
-    envelope = decode_line(valid_lines[-1])
-    assert envelope.ts == 2**64 - 1
+    envelope = next(
+        decode_line(line)
+        for line in valid_lines
+        if b'"outputTokens":4294967295' in line and b'"decode_tick"' in line
+    )
+    assert envelope.ts == 2**64 - 3
     assert envelope.payload.kv_cache_bytes == 2**64 - 1
     assert envelope.payload.output_tokens == 2**32 - 1
 

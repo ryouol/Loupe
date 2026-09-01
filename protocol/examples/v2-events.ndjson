@@ -1,0 +1,16 @@
+{"v":2,"seq":1,"ts":1000000000,"runId":"r-8f4e2a","event":"session_start","payload":{"adapter":"loupe-mlx","adapterVersion":"0.2.0","runtime":"mlx","pid":4242}}
+{"v":2,"seq":2,"ts":1000200000,"runId":"r-8f4e2a","event":"clock_sync","payload":{"t0":1000100000,"t1":73000150000,"t2":73000160000,"t3":1000200000}}
+{"v":2,"seq":3,"ts":1001000000,"runId":"r-8f4e2a","event":"model_load_start","payload":{"modelId":"mlx-community/Qwen2.5-0.5B-Instruct-4bit"}}
+{"v":2,"seq":4,"ts":4501000000,"runId":"r-8f4e2a","event":"model_load_end","payload":{"modelId":"mlx-community/Qwen2.5-0.5B-Instruct-4bit","ok":true,"weightsBytes":312475648}}
+{"v":2,"seq":5,"ts":5000000000,"runId":"r-8f4e2a","requestId":"q-1","event":"request_start","payload":{"promptTokens":128}}
+{"v":2,"seq":6,"ts":5300000000,"runId":"r-8f4e2a","requestId":"q-1","event":"prefill_end","payload":{"promptTokens":128}}
+{"v":2,"seq":7,"ts":5350000000,"runId":"r-8f4e2a","requestId":"q-1","event":"decode_tick","payload":{"outputTokens":1,"kvCacheBytes":8912896,"activeMemoryBytes":389283840}}
+{"v":2,"seq":8,"ts":5400000000,"runId":"r-8f4e2a","requestId":"q-1","event":"decode_tick","payload":{"outputTokens":2,"kvCacheBytes":8978432,"activeMemoryBytes":389349376}}
+{"v":2,"seq":9,"ts":9800000000,"runId":"r-8f4e2a","requestId":"q-1","event":"request_end","payload":{"outputTokens":96,"finishReason":"stop","decodeDurationNs":4363636364}}
+{"v":2,"seq":10,"ts":9900000000,"runId":"r-8f4e2a","requestId":"q-2","event":"request_start","payload":{}}
+{"v":2,"seq":11,"ts":10200000000,"runId":"r-8f4e2a","requestId":"q-2","event":"error","payload":{"code":"generation_failed","message":"metal command buffer aborted"}}
+{"v":2,"seq":12,"ts":10300000000,"runId":"r-8f4e2a","event":"error","payload":{"code":"socket_backpressure","message":""}}
+{"v":2,"seq":13,"ts":10400000000,"runId":"r-8f4e2a","requestId":"q-2","event":"prefill_end","payload":{"promptTokens":0}}
+{"v":2,"seq":14,"ts":18446744073709551613,"runId":"r-8f4e2a","requestId":"q-2","event":"decode_tick","payload":{"outputTokens":4294967295,"kvCacheBytes":18446744073709551615,"activeMemoryBytes":0}}
+{"v":2,"seq":15,"ts":18446744073709551614,"runId":"r-8f4e2a","requestId":"q-2","event":"request_end","payload":{"outputTokens":4294967295,"finishReason":"length","decodeDurationNs":18446744073709551615}}
+{"v":2,"seq":16,"ts":18446744073709551615,"runId":"r-8f4e2a","event":"transport_summary","payload":{"attemptedEvents":15,"producerDroppedEvents":0}}

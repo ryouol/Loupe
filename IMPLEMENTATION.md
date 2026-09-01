@@ -16,14 +16,18 @@ that routed adapter input and persistence through the root helper are obsolete.
   valid `session_start`.
 - State transitions survive relaunch and History exposes interrupted,
   degraded, denied, disconnected, reconnecting, failed, and stopped outcomes.
-- Stop drains accepted commands, ends the run, and exports a replay pair.
+- Stop drains accepted commands, closes loss accounting, ends the run, and
+  exports a replay pair plus acquisition metadata.
 
 ### Demo and evidence
 
 - One-click sanitized sample ships under `Resources/Samples`.
 - Analysis provides aligned runtime/telemetry lanes, request metrics, and
   evidence-backed findings.
-- JSON/CSV exports include source SHA-256 values and counted parser drops.
+- JSON/CSV exports carry the same source filenames/SHA-256 values, counts,
+  duration, thermal states, acquisition loss, and replay-parser drops.
+- Analysis separates process CPU/RSS, GPU utilization, GPU power, and package
+  power, retains spikes independently across metrics, and hides absent lanes.
 
 ### Security boundary
 
@@ -44,6 +48,10 @@ that routed adapter input and persistence through the root helper are obsolete.
   full host/OS fingerprint, report integrity, tool/adapter/runtime versions,
   model revision/artifact hash, and dependency-lock hash.
 - Missing legacy provenance blocks deltas but does not block viewing a report.
+- The CLI hashes the dependency lock itself, but `--runtime-version`,
+  `--model-revision`, and `--model-sha256` are operator-supplied assertions;
+  it does not independently resolve or hash a model artifact. Archive the exact
+  command, model artifact, lock, host, and runtime output with release evidence.
 
 ## Required acceptance commands
 

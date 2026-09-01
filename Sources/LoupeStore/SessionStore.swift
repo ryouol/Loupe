@@ -10,6 +10,7 @@ public enum StoreError: LocalizedError, Equatable {
     case unsafeDirectory(String)
     case invalidEvent
     case invalidSample
+    case invalidAcquisitionMetadata
     case fileOperation(Int32)
 
     public var errorDescription: String? {
@@ -20,6 +21,8 @@ public enum StoreError: LocalizedError, Equatable {
             return "Loupe refused storage that is not an owner-controlled directory."
         case .invalidEvent: return "A runtime event failed protocol validation."
         case .invalidSample: return "A telemetry row failed semantic validation."
+        case .invalidAcquisitionMetadata:
+            return "Acquisition integrity metadata failed validation."
         case .fileOperation(let code):
             return "A local evidence file operation failed (POSIX \(code))."
         }
@@ -128,9 +131,9 @@ public actor SessionStore {
             let systemStatement = try db.cachedStatement(
                 sql: """
                     INSERT INTO system_samples
-                    (run_id, ts_ns, thermal_state, memory_used_bytes, memory_free_bytes,
+                    (run_id, ts_ns, acquisition_sequence, thermal_state, memory_used_bytes, memory_free_bytes,
                      swap_used_bytes, gpu_busy_percent, gpu_power_mw, ane_power_mw, package_power_mw)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """)
             let processStatement = try db.cachedStatement(
                 sql: """
@@ -142,6 +145,7 @@ public actor SessionStore {
                 try systemStatement.execute(arguments: [
                     id,
                     Int64(bitPattern: system.ts),
+                    sample.acquisitionSequence.map(Int64.init(bitPattern:)),
                     system.thermalState.rawValue,
                     Int64(bitPattern: system.memoryUsedBytes),
                     Int64(bitPattern: system.memoryFreeBytes),
@@ -183,13 +187,16 @@ public actor SessionStore {
         try await pool.write { db in
             let statement = try db.cachedStatement(
                 sql: """
-                    INSERT INTO inference_events (run_id, ts_ns, request_id, event, payload)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO inference_events
+                    (run_id, protocol_version, sequence, ts_ns, request_id, event, payload)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     """)
             let encoder = JSONEncoder.deterministic()
             for envelope in events {
                 try statement.execute(arguments: [
                     envelope.runId,
+                    envelope.v,
+                    envelope.sequence.map(Int64.init(bitPattern:)),
                     Int64(bitPattern: envelope.ts),
                     envelope.requestId,
                     envelope.kind.rawValue,
@@ -285,10 +292,57 @@ public actor SessionStore {
         }
     }
 
-    /// Materializes the portable replay pair next to the opaque database.
-    /// SQLite remains the durable source; the NDJSON pair is the inspectable,
-    /// shareable evidence surface consumed by ReplayView.
-    public func exportReplayPair(to directory: URL) async throws -> SessionFilePair {
+    public func setAcquisitionMetadata(_ metadata: SessionAcquisitionMetadata) async throws {
+        guard Self.valid(metadata) else { throw StoreError.invalidAcquisitionMetadata }
+        let encoded = String(
+            decoding: try JSONEncoder.deterministic().encode(metadata), as: UTF8.self)
+        let id = runId
+        try await pool.write { db in
+            try db.execute(
+                sql: """
+                    INSERT INTO acquisition_metadata (run_id, metadata_json) VALUES (?, ?)
+                    ON CONFLICT(run_id) DO UPDATE SET metadata_json = excluded.metadata_json
+                    """,
+                arguments: [id, encoded])
+        }
+        try Self.hardenDatabaseFiles(at: databaseURL)
+    }
+
+    public func acquisitionMetadata() async throws -> SessionAcquisitionMetadata? {
+        let id = runId
+        return try await pool.read { db in
+            guard
+                let value = try String.fetchOne(
+                    db,
+                    sql: "SELECT metadata_json FROM acquisition_metadata WHERE run_id = ?",
+                    arguments: [id])
+            else { return nil }
+            let data = Data(value.utf8)
+            guard
+                let metadata = try? JSONDecoder().decode(
+                    SessionAcquisitionMetadata.self, from: data),
+                Self.valid(metadata)
+            else { throw StoreError.invalidAcquisitionMetadata }
+            return metadata
+        }
+    }
+
+    /// Materializes the portable replay bundle next to the opaque database.
+    /// SQLite remains the durable source; the NDJSON pair and acquisition
+    /// metadata are the inspectable, shareable surface consumed by ReplayView.
+    public func exportReplayPair(
+        to directory: URL,
+        acquisitionMetadata: SessionAcquisitionMetadata? = nil
+    ) async throws -> SessionFilePair {
+        let resolvedAcquisitionMetadata: SessionAcquisitionMetadata
+        if let acquisitionMetadata {
+            resolvedAcquisitionMetadata = acquisitionMetadata
+        } else {
+            resolvedAcquisitionMetadata = try await self.acquisitionMetadata() ?? .unknown
+        }
+        guard Self.valid(resolvedAcquisitionMetadata) else {
+            throw StoreError.invalidAcquisitionMetadata
+        }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try Self.hardenOwnerDirectory(directory)
         let baseURL = directory.appendingPathComponent(storageID.uuidString.lowercased())
@@ -298,6 +352,8 @@ public actor SessionStore {
             ".\(UUID().uuidString.lowercased()).events.tmp")
         let sampleTemporaryURL = directory.appendingPathComponent(
             ".\(UUID().uuidString.lowercased()).samples.tmp")
+        let metadataTemporaryURL = directory.appendingPathComponent(
+            ".\(UUID().uuidString.lowercased()).metadata.tmp")
         var eventFD = try Self.createSecureFile(at: eventTemporaryURL)
         defer {
             if eventFD >= 0 { close(eventFD) }
@@ -307,6 +363,11 @@ public actor SessionStore {
         defer {
             if sampleFD >= 0 { close(sampleFD) }
             unlink(sampleTemporaryURL.path)
+        }
+        var metadataFD = try Self.createSecureFile(at: metadataTemporaryURL)
+        defer {
+            if metadataFD >= 0 { close(metadataFD) }
+            unlink(metadataTemporaryURL.path)
         }
 
         let eventOutput = eventFD
@@ -347,13 +408,18 @@ public actor SessionStore {
             }
         }
 
-        guard fsync(eventFD) == 0, fsync(sampleFD) == 0 else {
+        try Self.writeAll(
+            try encoder.encode(resolvedAcquisitionMetadata), to: metadataFD)
+
+        guard fsync(eventFD) == 0, fsync(sampleFD) == 0, fsync(metadataFD) == 0 else {
             throw StoreError.fileOperation(errno)
         }
         guard close(eventFD) == 0 else { throw StoreError.fileOperation(errno) }
         eventFD = -1
         guard close(sampleFD) == 0 else { throw StoreError.fileOperation(errno) }
         sampleFD = -1
+        guard close(metadataFD) == 0 else { throw StoreError.fileOperation(errno) }
+        metadataFD = -1
         guard rename(eventTemporaryURL.path, pair.eventsURL.path) == 0 else {
             throw StoreError.fileOperation(errno)
         }
@@ -364,11 +430,18 @@ public actor SessionStore {
             unlink(pair.eventsURL.path)
             throw StoreError.fileOperation(code)
         }
-        for url in [pair.eventsURL, pair.systemURL] {
+        if rename(metadataTemporaryURL.path, pair.metadataURL.path) != 0 {
+            let code = errno
+            unlink(pair.eventsURL.path)
+            unlink(pair.systemURL.path)
+            throw StoreError.fileOperation(code)
+        }
+        for url in [pair.eventsURL, pair.systemURL, pair.metadataURL] {
             guard chmod(url.path, S_IRUSR | S_IWUSR) == 0 else {
                 throw StoreError.unsafeDirectory(directory.path)
             }
         }
+        try Self.syncDirectory(directory)
         return pair
     }
 
@@ -376,12 +449,15 @@ public actor SessionStore {
 
     private static func event(from row: Row, decoder: JSONDecoder) throws -> EventEnvelope {
         let eventName: String = row["event"]
+        let version: Int = row["protocol_version"]
+        let storedSequence: Int64? = row["sequence"]
         let payloadJSON: String = row["payload"]
         let requestId: String? = row["request_id"]
         guard let kind = EventKind(rawValue: eventName),
             let payloadObject = try? JSONSerialization.jsonObject(
                 with: Data(payloadJSON.utf8)) as? [String: Any],
-            Set(payloadObject.keys).isSubset(of: EventLineDecoder.allowedPayloadKeys(for: kind)),
+            Set(payloadObject.keys).isSubset(
+                of: EventLineDecoder.allowedPayloadKeys(for: kind, version: version)),
             let payload = try? EventPayload.decode(
                 kind: kind, from: Data(payloadJSON.utf8), using: decoder),
             !(kind.requiresRequestID && requestId == nil)
@@ -389,6 +465,8 @@ public actor SessionStore {
             throw StoreError.corruptEventRow("\(eventName): \(payloadJSON)")
         }
         let envelope = EventEnvelope(
+            version: version,
+            sequence: storedSequence.map(UInt64.init(bitPattern:)),
             ts: UInt64(bitPattern: row["ts_ns"]),
             runId: row["run_id"],
             requestId: requestId,
@@ -410,7 +488,10 @@ public actor SessionStore {
                 cpuPercent: row["process_cpu_percent"],
                 rssBytes: UInt64(bitPattern: row["process_rss_bytes"]))
         }
-        let sample = SystemSample(system: system, process: process)
+        let storedSequence: Int64? = row["acquisition_sequence"]
+        let sample = SystemSample(
+            acquisitionSequence: storedSequence.map(UInt64.init(bitPattern:)),
+            system: system, process: process)
         guard SystemSampleValidation.accepts(sample) else {
             throw StoreError.invalidSample
         }
@@ -498,6 +579,35 @@ public actor SessionStore {
                 }
             }
         }
+    }
+
+    private static func writeAll(_ data: Data, to descriptor: Int32) throws {
+        try data.withUnsafeBytes { raw in
+            guard let base = raw.baseAddress else { return }
+            var offset = 0
+            while offset < raw.count {
+                let written = Darwin.write(
+                    descriptor, base.advanced(by: offset), raw.count - offset)
+                if written > 0 {
+                    offset += written
+                } else if written < 0, errno == EINTR {
+                    continue
+                } else {
+                    throw StoreError.fileOperation(errno)
+                }
+            }
+        }
+    }
+
+    private static func valid(_ metadata: SessionAcquisitionMetadata) -> Bool {
+        metadata.isValid
+    }
+
+    private static func syncDirectory(_ directory: URL) throws {
+        let descriptor = open(directory.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard descriptor >= 0 else { throw StoreError.fileOperation(errno) }
+        defer { close(descriptor) }
+        guard fsync(descriptor) == 0 else { throw StoreError.fileOperation(errno) }
     }
 
     private static func rangeClause(

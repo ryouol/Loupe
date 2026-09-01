@@ -1,15 +1,16 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/ryouol/Loupe/main/protocol/events.schema.json",
-  "title": "Loupe inference event envelope (v1)",
+  "title": "Loupe inference event envelope (v2)",
   "description": "One event per NDJSON line. ts is mach_continuous_time nanoseconds on the emitter's clock; the clock_sync handshake maps emitter timestamps onto the app's clock. Changing anything here means bumping v, updating fixtures, and updating every adapter in the same commit.",
   "$comment": "x-limits is normative for decoders: both language implementations assert their constants against it.",
   "x-limits": { "maxLineBytes": 65536 },
   "type": "object",
-  "required": ["v", "ts", "runId", "event", "payload"],
+  "required": ["v", "seq", "ts", "runId", "event", "payload"],
   "additionalProperties": false,
   "properties": {
-    "v": { "const": 1 },
+    "v": { "const": 2 },
+    "seq": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 },
     "ts": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
     "runId": { "type": "string", "minLength": 1, "maxLength": 128 },
     "requestId": { "type": ["string", "null"], "minLength": 1, "maxLength": 128 },
@@ -23,6 +24,7 @@
         "prefill_end",
         "decode_tick",
         "request_end",
+        "transport_summary",
         "error"
       ]
     },
@@ -60,6 +62,10 @@
     {
       "if": { "properties": { "event": { "const": "request_end" } } },
       "then": { "properties": { "payload": { "$ref": "#/$defs/requestEnd" } } }
+    },
+    {
+      "if": { "properties": { "event": { "const": "transport_summary" } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/transportSummary" } } }
     },
     {
       "if": { "properties": { "event": { "const": "error" } } },
@@ -151,7 +157,17 @@
       "required": ["outputTokens", "finishReason"],
       "properties": {
         "outputTokens": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
-        "finishReason": { "type": "string", "minLength": 1, "maxLength": 64 }
+        "finishReason": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "decodeDurationNs": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 }
+      }
+    },
+    "transportSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attemptedEvents", "producerDroppedEvents"],
+      "properties": {
+        "attemptedEvents": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+        "producerDroppedEvents": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 }
       }
     },
     "errorPayload": {

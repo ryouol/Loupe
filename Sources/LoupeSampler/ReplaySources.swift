@@ -99,6 +99,8 @@ public actor ReplayTelemetrySource: TelemetrySource {
     }
 
     public func stream() -> AsyncStream<SystemSample> {
+        droppedLines = 0
+        loadFailure = nil
         let blob: Data
         do {
             if let preloadedData {
@@ -118,6 +120,9 @@ public actor ReplayTelemetrySource: TelemetrySource {
         var samples: [SystemSample] = []
         var rowCount = 0
         var lastTimestamp: UInt64?
+        var lastAcquisitionSequence: UInt64?
+        var sawLegacySequence = false
+        var sawVersionedSequence = false
         for line in blob.split(separator: UInt8(ascii: "\n")) {
             rowCount += 1
             guard rowCount <= ReplayResourceLimits.maxSamples else {
@@ -130,6 +135,22 @@ public actor ReplayTelemetrySource: TelemetrySource {
             if line.count <= EventLineDecoder.maxLineBytes,
                 let sample = SystemSampleWireDecoder.decode(Data(line))
             {
+                if let sequence = sample.acquisitionSequence {
+                    guard !sawLegacySequence,
+                        lastAcquisitionSequence.map({ sequence > $0 }) ?? true
+                    else {
+                        droppedLines += 1
+                        continue
+                    }
+                    sawVersionedSequence = true
+                    lastAcquisitionSequence = sequence
+                } else {
+                    guard !sawVersionedSequence else {
+                        droppedLines += 1
+                        continue
+                    }
+                    sawLegacySequence = true
+                }
                 guard lastTimestamp.map({ sample.system.ts >= $0 }) ?? true else {
                     loadFailure =
                         ReplayFileError.nonMonotonicTimestamps(
@@ -167,7 +188,7 @@ public actor ReplayTelemetrySource: TelemetrySource {
     }
 }
 
-/// Replays a `<name>.ndjson` file of protocol-v1 event lines.
+/// Replays a `<name>.ndjson` file of protocol-v2 or legacy-v1 event lines.
 public actor ReplayEventSource {
     private let fileURL: URL
     private let preloadedData: Data?
@@ -186,6 +207,8 @@ public actor ReplayEventSource {
     }
 
     public func stream() -> AsyncStream<EventEnvelope> {
+        drops = EventDropCounter()
+        loadFailure = nil
         let blob: Data
         do {
             if let preloadedData {

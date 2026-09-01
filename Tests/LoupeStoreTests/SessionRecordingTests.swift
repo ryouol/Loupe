@@ -35,6 +35,10 @@ private actor FiniteTelemetrySource: TelemetrySource {
             continuation.finish()
         }
     }
+
+    func acquisitionStats() -> TelemetryAcquisitionStats {
+        TelemetryAcquisitionStats(complete: true)
+    }
 }
 
 final class SessionRecordingTests: XCTestCase {
@@ -103,49 +107,78 @@ final class SessionRecordingTests: XCTestCase {
         defer { close(descriptor) }
         let pid = ProcessInfo.processInfo.processIdentifier
         let now = Timebase.live().nowNanoseconds()
-        let events: [EventEnvelope] = [
+        let applicationEvents: [EventEnvelope] = [
             EventEnvelope(
+                version: EventProtocol.version, sequence: 1,
                 ts: now, runId: started.runID, requestId: nil,
                 payload: .sessionStart(
                     .init(adapter: "test", adapterVersion: "1", runtime: "test", pid: pid))),
             EventEnvelope(
+                version: EventProtocol.version, sequence: 2,
                 ts: now + 1, runId: started.runID, requestId: nil,
                 payload: .clockSync(.init(t0: now, t1: now, t2: now, t3: now))),
             EventEnvelope(
+                version: EventProtocol.version, sequence: 3,
                 ts: now + 2, runId: started.runID, requestId: "q-1",
                 payload: .requestStart(.init(promptTokens: 4))),
             EventEnvelope(
+                version: EventProtocol.version, sequence: 4,
                 ts: now + 3, runId: started.runID, requestId: "q-1",
                 payload: .prefillEnd(.init(promptTokens: 4))),
             EventEnvelope(
+                version: EventProtocol.version, sequence: 5,
                 ts: now + 4, runId: started.runID, requestId: "q-1",
                 payload: .requestEnd(.init(outputTokens: 2, finishReason: "stop"))),
+            EventEnvelope(
+                version: EventProtocol.version, sequence: 6,
+                ts: now + 5, runId: started.runID, requestId: nil,
+                payload: .transportSummary(
+                    .init(attemptedEvents: 5, producerDroppedEvents: 0))),
         ]
-        for event in events { try send(event, to: descriptor) }
+        for event in applicationEvents { try send(event, to: descriptor) }
 
-        await waitFor { await recorder.currentSession()?.eventCount == events.count }
+        await waitFor { await recorder.currentSession()?.eventCount == applicationEvents.count }
         let stopped = try await recorder.stop()
         XCTAssertEqual(stopped.state, .stopped)
-        XCTAssertEqual(stopped.eventCount, events.count)
+        XCTAssertEqual(stopped.eventCount, applicationEvents.count)
         XCTAssertGreaterThan(stopped.sampleCount, 0)
         XCTAssertTrue(stopped.isReplayAvailable)
+        XCTAssertEqual(stopped.acquisitionMetadata?.eventLosses.exact, 0)
+        XCTAssertEqual(stopped.acquisitionMetadata?.telemetryLosses.exact, 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: stopped.filePair.metadataURL.path))
 
         let library = SessionLibrary(paths: paths)
         let history = try await library.sessions()
         XCTAssertEqual(history.count, 1)
         XCTAssertEqual(history.first?.storageID, stopped.storageID)
         XCTAssertEqual(history.first?.state, .stopped)
+        XCTAssertEqual(history.first?.acquisitionMetadata, stopped.acquisitionMetadata)
+
+        // A fresh store instance models an app relaunch: acquisition
+        // integrity must survive independently of the in-memory recorder.
+        let reopenedStore = try SessionStore(
+            storageID: stopped.storageID, runId: stopped.runID,
+            directory: paths.sessionsDirectory, startedAtNs: now, host: .stub)
+        let reopenedAcquisition = try await reopenedStore.acquisitionMetadata()
+        XCTAssertEqual(reopenedAcquisition, stopped.acquisitionMetadata)
 
         let decoded = EventLineDecoder().decodeLines(
             try Data(contentsOf: stopped.filePair.eventsURL))
-        XCTAssertEqual(decoded.envelopes.count, events.count)
+        XCTAssertEqual(decoded.envelopes.count, applicationEvents.count)
         XCTAssertEqual(decoded.drops.total, 0)
+        let portableSamples = try Data(contentsOf: stopped.filePair.systemURL)
+            .split(separator: UInt8(ascii: "\n"))
+            .compactMap { SystemSampleWireDecoder.decode(Data($0)) }
+        XCTAssertEqual(
+            portableSamples.compactMap(\.acquisitionSequence),
+            (1...portableSamples.count).map(UInt64.init))
 
         try await library.delete(stopped)
         let sessionsAfterDelete = try await library.sessions()
         XCTAssertTrue(sessionsAfterDelete.isEmpty)
         XCTAssertFalse(FileManager.default.fileExists(atPath: stopped.filePair.eventsURL.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: stopped.filePair.systemURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stopped.filePair.metadataURL.path))
     }
 
     func testWrongRunIDTransitionsToDeniedWithoutPersistence() async throws {
@@ -192,7 +225,10 @@ final class SessionRecordingTests: XCTestCase {
         await waitFor { await recorder.currentSession()?.state == .degraded }
         let degraded = await recorder.currentSession()
         XCTAssertEqual(degraded?.state, .degraded)
-        _ = try await recorder.stop()
+        let stopped = try await recorder.stop()
+        XCTAssertNil(stopped.acquisitionMetadata?.eventLosses.exact)
+        XCTAssertGreaterThanOrEqual(
+            stopped.acquisitionMetadata?.eventLosses.lowerBound ?? 0, 1)
     }
 
     func testReconnectAcceptsFreshSessionStartAcrossStatusRace() async throws {
@@ -233,6 +269,80 @@ final class SessionRecordingTests: XCTestCase {
         XCTAssertEqual(reconnected?.state, .recording)
         XCTAssertEqual(reconnected?.eventCount, 2)
         _ = try await recorder.stop()
+    }
+
+    func testProtocolV2CleanReconnectPreservesExactLossAndReplay() async throws {
+        let paths = paths()
+        defer {
+            try? FileManager.default.removeItem(at: paths.rootDirectory.deletingLastPathComponent())
+        }
+        let recorder = SessionRecorder(
+            paths: paths, host: .stub,
+            makeTelemetry: { FiniteTelemetrySource(pid: $0) })
+        let started = try await recorder.start()
+        let pid = ProcessInfo.processInfo.processIdentifier
+
+        for window in 0..<2 {
+            let descriptor = try connect(to: paths.adapterSocketURL.path)
+            let timestamp = UInt64(100 + window * 10)
+            let requestID = "q-window-\(window)"
+            let events = [
+                EventEnvelope(
+                    version: EventProtocol.version, sequence: 1,
+                    ts: timestamp, runId: started.runID, requestId: nil,
+                    payload: .sessionStart(
+                        .init(
+                            adapter: "test", adapterVersion: "2", runtime: "test",
+                            pid: pid))),
+                EventEnvelope(
+                    version: EventProtocol.version, sequence: 2,
+                    ts: timestamp + 1, runId: started.runID, requestId: requestID,
+                    payload: .requestStart(.init(promptTokens: 1))),
+                EventEnvelope(
+                    version: EventProtocol.version, sequence: 3,
+                    ts: timestamp + 2, runId: started.runID, requestId: requestID,
+                    payload: .prefillEnd(.init(promptTokens: 1))),
+                EventEnvelope(
+                    version: EventProtocol.version, sequence: 4,
+                    ts: timestamp + 3, runId: started.runID, requestId: requestID,
+                    payload: .requestEnd(
+                        .init(
+                            outputTokens: 0, finishReason: "stop",
+                            decodeDurationNs: nil))),
+                EventEnvelope(
+                    version: EventProtocol.version, sequence: 5,
+                    ts: timestamp + 4, runId: started.runID, requestId: nil,
+                    payload: .transportSummary(
+                        .init(attemptedEvents: 4, producerDroppedEvents: 0))),
+            ]
+            for event in events { try send(event, to: descriptor) }
+
+            await waitFor {
+                await recorder.currentSession()?.eventCount == (window + 1) * events.count
+            }
+            close(descriptor)
+            if window == 0 {
+                await waitFor {
+                    await recorder.currentSession()?.state == .adapterDisconnected
+                }
+            }
+        }
+
+        let stopped = try await recorder.stop()
+        XCTAssertEqual(stopped.eventCount, 10)
+        XCTAssertEqual(stopped.acquisitionMetadata?.eventLosses.exact, 0)
+
+        let replay = ReplayEventSource(fileURL: stopped.filePair.eventsURL)
+        var replayed: [EventEnvelope] = []
+        for await envelope in await replay.stream() { replayed.append(envelope) }
+        XCTAssertEqual(replayed.count, 10)
+        XCTAssertEqual(replayed.filter { $0.kind == .sessionStart }.count, 2)
+        XCTAssertEqual(replayed.filter { $0.kind == .transportSummary }.count, 2)
+        XCTAssertEqual(SessionMetrics.perRequest(events: replayed).count, 2)
+        let replayDrops = await replay.drops.total
+        let replayFailure = await replay.loadFailure
+        XCTAssertEqual(replayDrops, 0)
+        XCTAssertNil(replayFailure)
     }
 
     func testReconnectCanContinueAnActiveRequest() async throws {
@@ -365,7 +475,12 @@ final class SessionRecordingTests: XCTestCase {
             let session = await recorder.currentSession()
             return session?.state == .recording && session?.eventCount == 2
         }
-        _ = try await recorder.stop()
+        let stopped = try await recorder.stop()
+        XCTAssertNil(stopped.acquisitionMetadata?.eventLosses.exact)
+        XCTAssertGreaterThanOrEqual(
+            stopped.acquisitionMetadata?.eventLosses.lowerBound ?? 0, 2)
+        XCTAssertEqual(
+            stopped.acquisitionMetadata?.eventLosses.breakdown["recording_validation"], 2)
     }
 
     func testLibrarySkipsUnsupportedManifestSchema() async throws {
@@ -390,6 +505,34 @@ final class SessionRecordingTests: XCTestCase {
 
         let sessions = try await SessionLibrary(paths: paths).sessions()
         XCTAssertTrue(sessions.isEmpty)
+    }
+
+    func testLegacyManifestRelaunchReportsAcquisitionAsUnknown() async throws {
+        let paths = paths()
+        defer {
+            try? FileManager.default.removeItem(at: paths.rootDirectory.deletingLastPathComponent())
+        }
+        let recorder = SessionRecorder(
+            paths: paths, host: .stub,
+            makeTelemetry: { FiniteTelemetrySource(pid: $0) })
+        _ = try await recorder.start()
+        let stopped = try await recorder.stop()
+        let manifestURL = paths.sessionsDirectory.appendingPathComponent(
+            stopped.storageID.uuidString.lowercased() + ".session.json")
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: manifestURL))
+                as? [String: Any])
+        object["schemaVersion"] = 1
+        object.removeValue(forKey: "acquisitionMetadata")
+        try JSONSerialization.data(withJSONObject: object).write(
+            to: manifestURL, options: .atomic)
+        XCTAssertEqual(chmod(manifestURL.path, 0o600), 0)
+        try FileManager.default.removeItem(at: stopped.filePair.metadataURL)
+
+        let relaunched = try await SessionLibrary(paths: paths).sessions()
+        XCTAssertEqual(relaunched.count, 1)
+        XCTAssertNil(relaunched.first?.acquisitionMetadata)
+        XCTAssertTrue(relaunched.first?.isReplayAvailable == true)
     }
 
     func testLibrarySkipsManifestWithUnknownFields() async throws {

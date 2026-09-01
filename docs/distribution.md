@@ -29,6 +29,9 @@ with
 insufficient for a signed release.
 
 CI runs the complete gate on macOS and then builds the unsigned smoke image.
+The launch-readiness snapshot records the exact local toolchain limitation:
+parse/build checks from Command Line Tools are useful evidence, but they are
+not substitutes for the full-Xcode XCTest and app-target gates.
 
 ## Owner-only signed candidate
 
@@ -64,4 +67,7 @@ DMG; the DMG is separately notarized, stapled, assessed, verified, and hashed.
 - Compare the published SHA-256 to the generated sidecar.
 - Archive CI run URL, source commit, dependency locks, notary log, signatures,
   test results, and the exact uploaded DMG.
+- For any benchmark claim, archive the exact model artifact and independently
+  verify its SHA-256 plus runtime version and model revision; the benchmark CLI
+  requires those values but cannot prove operator-supplied assertions by itself.
 - Do not publish if any helper/signing/notary/Gatekeeper gate is skipped.

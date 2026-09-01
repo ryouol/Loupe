@@ -25,6 +25,22 @@ class CollectingSink:
         self.connected = False
 
 
+class SequenceClock:
+    def __init__(self, values: list[int]) -> None:
+        self._values = iter(values)
+
+    def __call__(self) -> int:
+        return next(self._values)
+
+
+class OneDropSink(CollectingSink):
+    def emit(self, envelope) -> None:
+        if envelope.seq == 2:
+            self.dropped += 1
+        else:
+            self.events.append(envelope)
+
+
 def install_fake_runtime(monkeypatch, stream_generate) -> None:
     mlx = types.ModuleType("mlx")
     mlx.__path__ = []
@@ -85,3 +101,103 @@ def test_unknown_finish_reason_is_reduced_to_category(monkeypatch) -> None:
 
     end = next(event.payload for event in sink.events if event.event == "request_end")
     assert end.finish_reason == "other"
+
+
+def test_adapter_relaunch_does_not_reuse_request_id(monkeypatch) -> None:
+    response = types.SimpleNamespace(prompt_tokens=1, prompt_tps=1.0, finish_reason="stop")
+
+    def generate(*_args, **_kwargs):
+        yield response
+
+    install_fake_runtime(monkeypatch, generate)
+    namespaces = iter(["a" * 32, "b" * 32])
+    monkeypatch.setattr(
+        "loupe_mlx.adapter.uuid.uuid4",
+        lambda: types.SimpleNamespace(hex=next(namespaces)),
+    )
+    request_ids = []
+    for _ in range(2):
+        sink = CollectingSink()
+        loupe = LoupeInstrument(run_id="r-relaunch", writer=sink)
+        list(loupe.stream_generate(object(), object(), prompt="x"))
+        loupe.close()
+        request_ids.append(
+            next(event.request_id for event in sink.events if event.event == "request_start")
+        )
+
+    assert request_ids == [f"q-{'a' * 32}-1", f"q-{'b' * 32}-1"]
+
+
+def test_one_token_early_stop_includes_first_token_interval(monkeypatch) -> None:
+    response = types.SimpleNamespace(
+        prompt_tokens=8,
+        prompt_tps=80.0,
+        # mlx-lm 0.31.3 starts this field's timer after token 1. An absurd
+        # value proves Loupe does not reuse that partial-window rate.
+        generation_tps=1_000_000.0,
+        finish_reason="eos",
+    )
+
+    def generate(*_args, **_kwargs):
+        yield response
+
+    install_fake_runtime(monkeypatch, generate)
+    sink = CollectingSink()
+    loupe = LoupeInstrument(
+        run_id="r-rate",
+        writer=sink,
+        clock=SequenceClock([100, 100, 1_000_000_000, 1_140_000_000, 1_150_000_000]),
+    )
+    assert len(list(loupe.stream_generate(object(), object(), prompt="x"))) == 1
+    loupe.close()
+
+    end = next(event.payload for event in sink.events if event.event == "request_end")
+    assert end.output_tokens == 1
+    assert end.finish_reason == "eos"
+    assert end.decode_duration_ns == 40_000_000
+    assert end.output_tokens / (end.decode_duration_ns / 1_000_000_000) == 25.0
+    summary = next(event.payload for event in sink.events if event.event == "transport_summary")
+    assert summary.producer_dropped_events == 0
+    sequences = [event.seq for event in sink.events]
+    assert sequences == list(range(1, len(sequences) + 1))
+
+
+def test_consumer_early_stop_closes_the_same_decode_window(monkeypatch) -> None:
+    response = types.SimpleNamespace(
+        prompt_tokens=8,
+        prompt_tps=80.0,
+        generation_tps=999_999.0,
+        finish_reason=None,
+    )
+
+    def generate(*_args, **_kwargs):
+        yield response
+        yield response
+
+    install_fake_runtime(monkeypatch, generate)
+    sink = CollectingSink()
+    loupe = LoupeInstrument(
+        run_id="r-cancel",
+        writer=sink,
+        clock=SequenceClock([100, 100, 1_000_000_000, 1_140_000_000, 1_170_000_000, 1_180_000_000]),
+    )
+    generated = loupe.stream_generate(object(), object(), prompt="x")
+    next(generated)
+    generated.close()
+    loupe.close()
+
+    end = next(event.payload for event in sink.events if event.event == "request_end")
+    assert end.output_tokens == 1
+    assert end.finish_reason == "cancelled"
+    assert end.decode_duration_ns == 40_000_000
+
+
+def test_terminal_summary_reports_adapter_queue_loss() -> None:
+    sink = OneDropSink()
+    loupe = LoupeInstrument(run_id="r-drop", writer=sink)
+    loupe.close()
+
+    assert [event.seq for event in sink.events] == [1, 3]
+    summary = sink.events[-1].payload
+    assert summary.producer_dropped_events == 1
+    assert summary.attempted_events == 2
