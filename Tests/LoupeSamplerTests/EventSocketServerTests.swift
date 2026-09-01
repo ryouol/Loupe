@@ -76,7 +76,8 @@ final class EventSocketServerTests: XCTestCase {
         let fixture = try socketFixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
         let server = EventSocketServer(socketPath: fixture.path)
-        _ = try await server.start()
+        let stream = try await server.start()
+        defer { withExtendedLifetime(stream) {} }
         defer { Task { await server.stop() } }
 
         let descriptor = try connect(to: fixture.path)
@@ -106,7 +107,8 @@ final class EventSocketServerTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
         let server = EventSocketServer(
             socketPath: fixture.path, maxBufferedEvents: 1)
-        _ = try await server.start()
+        let stream = try await server.start()
+        defer { withExtendedLifetime(stream) {} }
         defer { Task { await server.stop() } }
 
         let descriptor = try connect(to: fixture.path)
@@ -138,7 +140,8 @@ final class EventSocketServerTests: XCTestCase {
         let fixture = try socketFixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
         let server = EventSocketServer(socketPath: fixture.path)
-        _ = try await server.start()
+        let stream = try await server.start()
+        defer { withExtendedLifetime(stream) {} }
         defer { Task { await server.stop() } }
 
         let descriptor = try connect(to: fixture.path)
@@ -166,7 +169,8 @@ final class EventSocketServerTests: XCTestCase {
         let fixture = try socketFixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
         let server = EventSocketServer(socketPath: fixture.path)
-        _ = try await server.start()
+        let stream = try await server.start()
+        defer { withExtendedLifetime(stream) {} }
         defer { Task { await server.stop() } }
 
         let descriptor = try connect(to: fixture.path)

@@ -16,10 +16,12 @@ private actor FiniteTelemetrySource: TelemetrySource {
 
     func stream() -> AsyncStream<SystemSample> {
         let pid = pid
-        let start = Timebase.live().nowNanoseconds()
         return AsyncStream { continuation in
-            for index in 0..<4 {
-                let timestamp = start + UInt64(index) * 1_000_000
+            for _ in 0..<4 {
+                // Use observed timestamps. Fabricating samples milliseconds
+                // into the future makes a later PID-correlated source overlap
+                // this source even though the recorder drains them in order.
+                let timestamp = Timebase.live().nowNanoseconds()
                 continuation.yield(
                     SystemSample(
                         system: SystemWideSample(

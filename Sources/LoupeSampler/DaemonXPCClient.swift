@@ -73,9 +73,14 @@ private final class DaemonReceiveCounter: @unchecked Sendable {
     }
 
     func record<T>(_ result: AsyncStream<T>.Continuation.YieldResult) {
-        if case .dropped = result {
-            lock.withLock { receiverDrops = Self.adding(receiverDrops, 1) }
+        let wasLost: Bool
+        switch result {
+        case .enqueued: wasLost = false
+        case .dropped, .terminated: wasLost = true
+        @unknown default: wasLost = true
         }
+        guard wasLost else { return }
+        lock.withLock { receiverDrops = Self.adding(receiverDrops, 1) }
     }
 
     func recordMalformed() {

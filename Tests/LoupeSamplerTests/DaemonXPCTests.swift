@@ -27,6 +27,18 @@ private actor DuplicateSequenceTelemetrySource: TelemetrySource {
     }
 }
 
+private final class PeerValidationProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var calls = 0
+
+    func reject() -> Bool {
+        lock.withLock { calls += 1 }
+        return false
+    }
+
+    var callCount: Int { lock.withLock { calls } }
+}
+
 /// Drives the real NSXPC machinery in-process through an anonymous listener:
 /// no mach service registration, no SMAppService, no root. What this cannot
 /// cover — actual launchd registration and reboot survival — is scripted in
@@ -52,8 +64,9 @@ final class DaemonXPCTests: XCTestCase {
 
     func testListenerRejectsPeerWhenPolicyDenies() {
         let listener = NSXPCListener.anonymous()
+        let policy = PeerValidationProbe()
         let delegate = DaemonListenerDelegate(
-            daemonVersion: "test", peerValidator: DaemonPeerValidator { _ in false }
+            daemonVersion: "test", peerValidator: DaemonPeerValidator { _ in policy.reject() }
         ) { cadence in
             LiveTelemetrySource(targetPID: nil, cadence: cadence)
         }
@@ -66,17 +79,20 @@ final class DaemonXPCTests: XCTestCase {
 
         let connection = NSXPCConnection(listenerEndpoint: listener.endpoint)
         connection.remoteObjectInterface = NSXPCInterface(with: LoupeDaemonXPCProtocol.self)
+        let rejected = expectation(description: "connection rejected")
+        let handshakeReply = expectation(description: "denied handshake reply")
+        handshakeReply.isInverted = true
         connection.resume()
         defer { connection.invalidate() }
 
-        let rejected = expectation(description: "connection rejected")
-        connection.invalidationHandler = { rejected.fulfill() }
-        (connection.remoteObjectProxy as? LoupeDaemonXPCProtocol)?.handshake(
+        let proxy = connection.remoteObjectProxyWithErrorHandler { _ in rejected.fulfill() }
+        (proxy as? LoupeDaemonXPCProtocol)?.handshake(
             clientProtocolVersion: EventProtocol.version
         ) { _ in
-            XCTFail("denied peer must not receive a handshake")
+            handshakeReply.fulfill()
         }
-        wait(for: [rejected], timeout: 2)
+        wait(for: [rejected, handshakeReply], timeout: 2)
+        XCTAssertEqual(policy.callCount, 1, "listener policy must be the rejection source")
     }
 
     func testHandshakeRoundTrip() async {

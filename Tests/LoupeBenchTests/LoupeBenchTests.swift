@@ -187,21 +187,26 @@ final class CooldownGateTests: XCTestCase {
     }
 
     func testHotObservationResetsNominalDwell() async {
-        let stream = AsyncStream<ThermalState> { continuation in
-            Task {
-                continuation.yield(.nominal)
-                try? await Task.sleep(for: .milliseconds(15))
-                continuation.yield(.serious)
-                try? await Task.sleep(for: .milliseconds(15))
-                continuation.yield(.nominal)
-                try? await Task.sleep(for: .milliseconds(25))
-                continuation.yield(.nominal)
-            }
+        let (stream, continuation) = AsyncStream<ThermalState>.makeStream()
+        let producer = Task {
+            // Let the gate install its observer before the first state. If the
+            // producer races ahead, AsyncStream correctly buffers the states
+            // but a wall-clock assertion no longer measures the reset.
+            try? await Task.sleep(for: .milliseconds(10))
+            continuation.yield(.nominal)
+            try? await Task.sleep(for: .milliseconds(15))
+            continuation.yield(.serious)
+            try? await Task.sleep(for: .milliseconds(15))
+            continuation.yield(.nominal)
+            try? await Task.sleep(for: .milliseconds(25))
+            continuation.yield(.nominal)
         }
         let clock = ContinuousClock()
         let start = clock.now
         let outcome = await CooldownGate.waitForNominal(
             states: stream, timeout: .seconds(5), stableFor: .milliseconds(20))
+        await producer.value
+        continuation.finish()
         XCTAssertEqual(outcome, .nominal)
         XCTAssertGreaterThanOrEqual(clock.now - start, .milliseconds(50))
     }
@@ -360,9 +365,9 @@ final class BenchmarkGoldenFileTests: XCTestCase {
             return
         }
         let golden = try Data(contentsOf: Self.goldenURL)
-        XCTAssertEqual(
-            String(decoding: encoded, as: UTF8.self),
-            String(decoding: golden, as: UTF8.self))
+        let normalizedGolden =
+            golden.last == UInt8(ascii: "\n") ? Data(golden.dropLast()) : golden
+        XCTAssertEqual(encoded, normalizedGolden)
     }
 
     func testReportRoundTripsThroughItsCodec() throws {

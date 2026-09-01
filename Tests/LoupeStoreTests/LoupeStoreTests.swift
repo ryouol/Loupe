@@ -222,7 +222,7 @@ final class LoupeStoreTests: XCTestCase {
     func testAdapterRunIDNeverControlsDatabasePath() throws {
         let hostile = "../../../../tmp/loupe-escape"
         let store = try makeStore(runId: hostile)
-        XCTAssertEqual(store.databaseURL.deletingLastPathComponent(), directory)
+        XCTAssertEqual(store.databaseURL.deletingLastPathComponent().path, directory.path)
         XCTAssertEqual(
             store.databaseURL.lastPathComponent, "\(storageID.uuidString.lowercased()).sqlite")
         XCTAssertFalse(store.databaseURL.path.contains("loupe-escape"))

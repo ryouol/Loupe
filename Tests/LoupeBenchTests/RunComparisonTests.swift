@@ -36,15 +36,19 @@ final class RunComparisonTests: XCTestCase {
                 BenchmarkReport.ContextResult(
                     contextTokens: 128,
                     runs: [BenchmarkReport.RunResult(runIndex: 0, requests: [metrics])],
-                    ttftMs: DistributionSummary(values: [ttftP50]),
-                    decodeTokensPerSecond: DistributionSummary(values: [decodeP50]))
+                    ttftMs: DistributionSummary(values: [metrics.ttftMs]),
+                    decodeTokensPerSecond: DistributionSummary(
+                        values: [metrics.decodeTokensPerSecond]))
             ])
     }
 
     func testMatchingSpecsProduceDeltas() {
+        let baseline = report(decodeP50: 200, ttftP50: 100)
+        let candidate = report(decodeP50: 220, ttftP50: 90)
+        XCTAssertTrue(baseline.validationFailures.isEmpty)
+        XCTAssertTrue(candidate.validationFailures.isEmpty)
         let comparison = RunComparison.compare(
-            baseline: report(decodeP50: 200, ttftP50: 100),
-            candidate: report(decodeP50: 220, ttftP50: 90))
+            baseline: baseline, candidate: candidate)
 
         XCTAssertTrue(comparison.isComparable)
         XCTAssertTrue(comparison.mismatches.isEmpty)

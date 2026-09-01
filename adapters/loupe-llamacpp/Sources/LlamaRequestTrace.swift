@@ -143,7 +143,8 @@ public enum LlamaRequestTrace {
         }
         guard tokensPerSecond.isFinite, tokensPerSecond > 0 else { return nil }
         let value = Double(outputTokens) / tokensPerSecond * 1_000_000_000
-        guard value.isFinite, value > 0 else { return nil }
+        guard value > 0 else { return nil }
+        guard value.isFinite else { return UInt64.max }
         guard value < Double(UInt64.max) else { return UInt64.max }
         return UInt64(value)
     }
