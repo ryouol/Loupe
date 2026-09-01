@@ -46,11 +46,11 @@ final class ReplaySourceTests: XCTestCase {
 
     private func sampleLine(ts: UInt64, rss: UInt64, sequence: UInt64? = nil) -> String {
         let sequenceField = sequence.map { #""acquisitionSequence":\#($0),"# } ?? ""
-        """
-        {\(sequenceField)"system":{"ts":\(ts),"thermalState":"nominal","memoryUsedBytes":1024,\
-        "memoryFreeBytes":2048,"swapUsedBytes":0},\
-        "process":{"ts":\(ts),"pid":42,"cpuPercent":12.5,"rssBytes":\(rss)}}
-        """
+        return """
+            {\(sequenceField)"system":{"ts":\(ts),"thermalState":"nominal","memoryUsedBytes":1024,\
+            "memoryFreeBytes":2048,"swapUsedBytes":0},\
+            "process":{"ts":\(ts),"pid":42,"cpuPercent":12.5,"rssBytes":\(rss)}}
+            """
     }
 
     func testReplayTelemetryYieldsAllSamplesInOrder() async throws {
