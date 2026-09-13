@@ -2,6 +2,14 @@
 
 Snapshot date: 2026-09-01. This is an engineering status, not a launch claim.
 
+**Review update (2026-09-12):** the later [baseline CI run](https://github.com/ryouol/Loupe/actions/runs/33529158114)
+passed full-Xcode build, tests (224 Swift tests, 3 skipped; 63 Python passed,
+1 skipped), and unsigned packaging. Real app screenshots are now included in
+the [demo walkthrough](DEMO.md). The workspace-only observations below remain
+historical; see the [engineering review guide](ENGINEERING_REVIEW.md#validation-evidence)
+for subsequent evidence. Signing, notarization, and hardware validation remain
+separate gates.
+
 ## Implemented
 
 - root helper reduced to telemetry-only;

@@ -1,5 +1,42 @@
 # Loupe
 
+**See what happens during local AI inference.** Native macOS profiling for Apple Silicon.
+
+[![CI](https://github.com/ryouol/Loupe/actions/workflows/ci.yml/badge.svg)](https://github.com/ryouol/Loupe/actions/workflows/ci.yml)
+
+[Three-minute demo](docs/DEMO.md) · [Engineering review guide](docs/ENGINEERING_REVIEW.md) · [Architecture](docs/ARCHITECTURE.md) · [Recording quickstart](docs/RECORDING_QUICKSTART.md)
+
+![Loupe Analysis showing prefill and decode phases aligned with memory, swap, GPU utilization, and power](docs/media/analysis.png)
+
+*The bundled sanitized sample: two requests, 20 telemetry samples, and 16 runtime events.
+These are replay visuals, not a live hardware benchmark. Acquisition loss is correctly
+`unknown` because this historical sample lacks producer accounting metadata.*
+
+## What you can inspect
+
+| Question | Loupe view |
+|---|---|
+| Where did inference spend time? | Shared prefill/decode timeline and per-request time to first token (TTFT) |
+| What changed while the model ran? | Separate system memory/swap, GPU/power, and process CPU/RSS lanes |
+| Can I trust the trace? | Acquisition-loss accounting shown separately from replay-parser drops |
+| Can someone else inspect the evidence? | Portable session files and JSON/CSV evidence with source SHA-256 hashes |
+
+<details>
+<summary>More screenshots: overview and request-level evidence</summary>
+
+![Loupe Overview with recording, sample, and import entry points](docs/media/overview.png)
+
+*Unsigned CI smoke build. The helper warning is visible; local replay requires no helper.*
+
+![Loupe request table and underlying runtime events](docs/media/requests.png)
+
+*The same bundled sample shows 450 ms and 850 ms TTFT for its two requests.
+See [capture provenance](docs/media/README.md) for the origin of each image.*
+
+</details>
+
+## How it works
+
 Loupe is a local-first macOS profiler for Apple Silicon inference. It places
 model load, prefill, decode, and provenance-typed memory events (including
 modeled KV where defensible) on the same timeline as
@@ -17,25 +54,45 @@ loss and replay-file corruption are shown separately: an exact count requires a
 closed producer accounting window, while legacy or interrupted sessions show
 `unknown` (with an observed lower bound when available), never an invented zero.
 
-## Try it without setup
+## Run the demo
 
-Build and launch the app, then choose **Open sample session**. The sample is
-bundled, sanitized, and requires no root helper, model download, cloud account,
-or paid API.
+The demo needs no model download, root helper, account, or API key. Building
+from source requires **Apple Silicon, macOS 15+, and full Xcode 16+**; Command
+Line Tools alone cannot build the app or run XCTest.
 
 ```bash
+git clone https://github.com/ryouol/Loupe.git
+cd Loupe
+# Install these tools with Homebrew if they are not already available.
+brew install xcodegen uv
 make bootstrap
-make build
-make test
 make replay
 ```
 
-Requirements: Apple Silicon, macOS 15+, Xcode 16+, XcodeGen, Swift Format,
-Actionlint, ShellCheck, and uv 0.11.15 or newer (CI pins 0.12.8). Python
-dependencies resolve from the committed `adapters/loupe-mlx/uv.lock`.
+`make replay` builds an unsigned app and opens the bundled sample directly in
+**Analysis**. On a normal app launch, choose **Open sample session** instead.
+Follow the [three-minute walkthrough](docs/DEMO.md) for expected values,
+scrubbing, and evidence export.
 
-Release verification additionally requires OSV-Scanner; `make verify` audits
-both dependency lockfiles before any artifact can be packaged.
+To validate the code:
+
+```bash
+make build
+make test
+# Additional tools used by make lint:
+brew install swift-format actionlint shellcheck
+make lint
+```
+
+Python dependencies resolve from `adapters/loupe-mlx/uv.lock`. Use uv 0.11.15
+or newer (CI pins 0.12.8). Release verification also requires OSV-Scanner;
+`make verify` audits both dependency lockfiles before packaging.
+
+Reviewing without a local build? Start with the screenshots above, the
+[engineering review guide](docs/ENGINEERING_REVIEW.md), and the
+[successful baseline CI run](https://github.com/ryouol/Loupe/actions/runs/33529158114).
+Its downloadable unsigned smoke artifact is for engineering evaluation;
+artifact availability is subject to GitHub retention and sign-in requirements.
 
 ## Record a real run
 
