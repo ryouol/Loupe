@@ -2,6 +2,7 @@
 
 import argparse
 import csv
+import hashlib
 import json
 import statistics
 import subprocess
@@ -9,7 +10,14 @@ import tempfile
 from pathlib import Path
 
 
-def audit(directory, exporter):
+def audit(directory, exporter, manifest_path=None):
+    if manifest_path is not None:
+        expected = json.loads(manifest_path.read_text())
+        for name, digest in expected.items():
+            relative = Path(name)
+            if relative.parts[0] == directory.name:
+                source = directory.parent / relative
+                assert hashlib.sha256(source.read_bytes()).hexdigest() == digest, name
     events = [json.loads(line) for line in (directory / "capture.ndjson").read_text().splitlines()]
     client = json.loads((directory / "client.json").read_text())
     groups = []
@@ -48,6 +56,19 @@ def audit(directory, exporter):
     report = json.loads((directory / "evidence.json").read_text())
     assert report["droppedEventLines"] == report["droppedSampleLines"] == 0
     assert len(report["requests"]) == len(client["runs"])
+    exported = {request["requestId"]: request for request in report["requests"]}
+    for row, group in zip(client["runs"], groups, strict=True):
+        metric = exported[group[0]["requestId"]]
+        assert abs(metric["ttftNs"] - row["responses"][0]["elapsed_ns"]) < 2_000_000
+        assert metric["outputTokens"] == row["responses"][-1]["generation_tokens"]
+        if row.get("progress"):
+            boundary = next(
+                p["elapsed_ns"] for p in row["progress"] if p["processed"] == p["total"] - 1
+            )
+            assert (
+                abs(metric["decodeDurationNs"] - (row["responses"][-1]["elapsed_ns"] - boundary))
+                < 2_000_000
+            )
     assert report["requestOutcomes"][-1]["finishReason"] == "cancelled"
     csv_rows = list(csv.DictReader((directory / "evidence.csv").open()))
     assert any(
@@ -136,5 +157,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("directory", type=Path)
     parser.add_argument("--exporter", default=".build/debug/loupe-export")
+    parser.add_argument("--manifest", type=Path)
     args = parser.parse_args()
-    audit(args.directory, args.exporter)
+    audit(args.directory, args.exporter, args.manifest)
