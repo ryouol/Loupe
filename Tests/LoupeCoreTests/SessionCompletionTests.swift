@@ -7,13 +7,17 @@ final class SessionCompletionTests: XCTestCase {
         for reason in ["stop", "length", "eos", "cancelled", "error", "other"] {
             let events = [
                 EventEnvelope(
-                    ts: 100, runId: "r", requestId: "q", payload: .requestStart(.init())),
+                    ts: 100, runId: "r", requestId: "q",
+                    payload: .requestStart(.init(promptTokens: nil))),
                 EventEnvelope(
                     ts: 200, runId: "r", requestId: "q",
                     payload: .prefillEnd(.init(promptTokens: 10))),
                 EventEnvelope(
                     ts: 250, runId: "r", requestId: "q",
-                    payload: .decodeTick(.init(outputTokens: 1, activeMemoryBytes: 100))),
+                    payload: .decodeTick(
+                        .init(
+                            outputTokens: 1, kvCacheBytes: nil, activeMemoryBytes: 100,
+                            allocatorMemoryGrowthBytes: 0, memoryProvenance: .allocatorDeltaProxy))),
                 EventEnvelope(
                     ts: 400, runId: "r", requestId: "q",
                     payload: .requestEnd(
