@@ -240,7 +240,7 @@ final class LoupeLlamaCppTests: XCTestCase {
             kv: KVCacheModel(layers: 1, headDimension: 1, kvHeads: 1))
 
         XCTAssertEqual(events.map(\.ts), events.map(\.ts).sorted())
-        XCTAssertEqual(events.last?.ts, UInt64.max)
+        XCTAssertEqual(events.last?.ts, UInt64.max - 1)
     }
 
     func testOneTokenEarlyStopPreservesRuntimeReportedRate() {
@@ -289,6 +289,44 @@ final class LoupeLlamaCppTests: XCTestCase {
 
         XCTAssertEqual(
             SessionMetrics.perRequest(events: events).first?.decodeDurationNs, UInt64.max)
+    }
+
+    func testTruncatedStreamWithTimingsIsNotSuccessful() {
+        let timings = LlamaTimings(
+            promptN: 8, promptMs: 1, predictedN: 2,
+            predictedMs: 2, predictedPerSecond: 500)
+        let events = LlamaRequestTrace.events(
+            runId: "r", requestId: "q",
+            requestStartNs: 1, chunkArrivalsNs: [3],
+            chunks: [LlamaCompletionChunk(content: "x", stop: false, timings: timings)],
+            kv: KVCacheModel(layers: 1, headDimension: 1, kvHeads: 1))
+        guard case .requestEnd(let end) = events.last?.payload else {
+            return XCTFail("Missing failure outcome")
+        }
+        XCTAssertEqual(end.finishReason, "error")
+        XCTAssertNil(end.decodeDurationNs)
+    }
+
+    func testCurrentServerTokenCountsAndLimit() throws {
+        let body = Data(
+            #"{"content":"hello","stop":true,"tokens_predicted":3,"tokens_evaluated":12,"stop_type":"limit","timings":{"prompt_n":2,"prompt_ms":1,"predicted_n":3,"predicted_ms":2,"predicted_per_second":1000}}"#
+                .utf8)
+        let chunk = try JSONDecoder().decode(LlamaCompletionChunk.self, from: body)
+        let events = LlamaRequestTrace.events(
+            runId: "r", requestId: "q",
+            requestStartNs: 1, chunkArrivalsNs: [4], chunks: [chunk],
+            kv: KVCacheModel(layers: 1, headDimension: 1, kvHeads: 1))
+        guard case .requestEnd(let end) = events.last?.payload else {
+            return XCTFail("Missing outcome")
+        }
+        XCTAssertEqual(end.finishReason, "length")
+        XCTAssertEqual(events.last?.ts, 4)
+        XCTAssertEqual(SessionMetrics.perRequest(events: events).first?.promptTokens, 12)
+        let ticks = events.compactMap { event -> DecodeTickPayload? in
+            if case .decodeTick(let tick) = event.payload { return tick }
+            return nil
+        }
+        XCTAssertEqual(ticks.first?.outputTokens, 3)
     }
 
     // MARK: PID resolution

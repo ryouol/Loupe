@@ -187,13 +187,18 @@ do {
     // one-request counter from colliding with evidence already persisted.
     let requestID =
         "q-\(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased())"
+    // Persist the attempt before network I/O so cancellation remains visible.
+    emit(
+        EventEnvelope(
+            ts: startNs, runId: runId, requestId: requestID,
+            payload: .requestStart(RequestStartPayload(promptTokens: nil))))
     let (chunks, arrivals) = try await streamCompletion(
         server: serverURL, prompt: prompt, maxTokens: maxTokens,
         timebase: timebase, session: httpSession)
     for envelope in LlamaRequestTrace.events(
         runId: runId, requestId: requestID, requestStartNs: startNs,
-        chunkArrivalsNs: arrivals, chunks: chunks, kv: kvModel)
-    {
+        chunkArrivalsNs: arrivals, chunks: chunks, kv: kvModel
+    ).dropFirst() {
         emit(envelope)
     }
 
@@ -259,6 +264,9 @@ func streamCompletion(
         "n_predict": maxTokens,
         "stream": true,
         "timings_per_token": false,
+        "temperature": 0,
+        "seed": 42,
+        "cache_prompt": false,
     ])
 
     request.timeoutInterval = 300
@@ -277,9 +285,8 @@ func streamCompletion(
         if byte == UInt8(ascii: "\n") {
             let text = String(decoding: line, as: UTF8.self)
             line.removeAll(keepingCapacity: true)
-            guard let payload = SSEParser.dataPayloads(text + "\n").first,
-                let chunk = try? decoder.decode(LlamaCompletionChunk.self, from: payload)
-            else { continue }
+            guard let payload = SSEParser.dataPayloads(text + "\n").first else { continue }
+            let chunk = try decoder.decode(LlamaCompletionChunk.self, from: payload)
             guard chunks.count < maxTokens + 8 else { throw AdapterFailure.tooManyChunks }
             chunks.append(chunk)
             arrivals.append(timebase.nowNanoseconds())

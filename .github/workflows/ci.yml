@@ -56,6 +56,28 @@ jobs:
           tar -xzf investigations/mlx-2026-09-16/recordings.tar.gz -C .build/investigation
           .venv/bin/python scripts/check-investigation.py .build/investigation/verified --manifest investigations/mlx-2026-09-16/SHA256.json
 
+      - name: Replay real llama.cpp completed and cancelled recordings
+        run: |
+          mkdir -p .build/llamacpp-evidence
+          tar -xzf investigations/llamacpp-2026-09-16/recordings.tar.gz -C .build/llamacpp-evidence
+          for name in completed-1 completed-2 cancelled before-fix; do
+            .build/debug/loupe-export ".build/llamacpp-evidence/$name/session" ".build/llamacpp-evidence/$name/verified"
+          done
+          .venv/bin/python - <<'PYTHON'
+          import json
+          from pathlib import Path
+          root = Path('.build/llamacpp-evidence')
+          for name in ('completed-1', 'completed-2', 'cancelled'):
+              data = json.loads((root / name / 'verified.json').read_text())
+              assert data['droppedEventLines'] == data['droppedSampleLines'] == 0
+              assert data['sampleCount'] > 0
+              assert data['telemetryAcquisitionLosses']['lowerBound'] == 0
+              assert len(data['requestOutcomes']) == 1
+              expected = 'incomplete' if name == 'cancelled' else 'length'
+              assert data['requestOutcomes'][0]['finishReason'] == expected
+              assert len(data['requests']) == (0 if name == 'cancelled' else 1)
+          PYTHON
+
       - name: Build unsigned package smoke artifact
         env:
           LOUPE_RELEASE_TESTS_PASSED: "1"

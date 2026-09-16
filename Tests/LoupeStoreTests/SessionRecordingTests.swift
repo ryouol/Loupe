@@ -43,6 +43,25 @@ private actor FiniteTelemetrySource: TelemetrySource {
     }
 }
 
+private actor OpenTelemetrySource: TelemetrySource {
+    private(set) var started = false
+    func stream() -> AsyncStream<SystemSample> {
+        started = true
+        return AsyncStream { continuation in
+            continuation.yield(
+                SystemSample(
+                    system: SystemWideSample(
+                        ts: Timebase.live().nowNanoseconds(), thermalState: .nominal,
+                        memoryUsedBytes: 1_000, memoryFreeBytes: 2_000, swapUsedBytes: 0),
+                    process: nil))
+            // Deliberately stays open until recorder.stop cancels the consumer.
+        }
+    }
+    func acquisitionStats() -> TelemetryAcquisitionStats {
+        TelemetryAcquisitionStats(complete: true)
+    }
+}
+
 final class SessionRecordingTests: XCTestCase {
     private func paths() -> LoupeStoragePaths {
         LoupeStoragePaths(
@@ -88,6 +107,22 @@ final class SessionRecordingTests: XCTestCase {
             if await condition() { return }
             try? await Task.sleep(for: .milliseconds(10))
         }
+    }
+
+    func testStopFlushesTelemetryTailFromCancelledSampler() async throws {
+        let paths = paths()
+        defer {
+            try? FileManager.default.removeItem(at: paths.rootDirectory.deletingLastPathComponent())
+        }
+        let source = OpenTelemetrySource()
+        let recorder = SessionRecorder(paths: paths, host: .stub, makeTelemetry: { _ in source })
+        _ = try await recorder.start()
+        await waitFor { await source.started }
+        let stopped = try await recorder.stop()
+        XCTAssertEqual(stopped.sampleCount, 1)
+        XCTAssertEqual(stopped.acquisitionMetadata?.telemetryLosses.exact, 0)
+        let rows = try Data(contentsOf: stopped.filePair.systemURL)
+        XCTAssertEqual(rows.split(separator: 10).count, 1)
     }
 
     func testRecordStopPersistsHistoryAndPortableEvidence() async throws {

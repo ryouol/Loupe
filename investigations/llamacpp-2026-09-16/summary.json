@@ -1,0 +1,133 @@
+{
+  "completed-1": {
+    "eventCount": 134,
+    "sampleCount": 9,
+    "requestOutcomes": [
+      {
+        "finishReason": "length",
+        "outputTokens": 128,
+        "requestId": "q-8a5d34d7972846a3bfea2157b08ba18e"
+      }
+    ],
+    "requests": [
+      {
+        "decodeDurationNs": 828565000,
+        "outputTokens": 128,
+        "promptTokens": 18,
+        "requestId": "q-8a5d34d7972846a3bfea2157b08ba18e",
+        "ttftNs": 97152208
+      }
+    ],
+    "eventAcquisitionLosses": {
+      "breakdown": {
+        "connection_commands": 0,
+        "event_buffer": 0,
+        "ingest_chunk_lower_bound": 0,
+        "producer_reported": 0,
+        "producer_sequence_gap_lower_bound": 0,
+        "recording_limit": 0,
+        "recording_persistence": 0,
+        "recording_validation": 0,
+        "sequence_integrity_violations": 0,
+        "socket_parser": 0,
+        "status_notifications": 0
+      },
+      "exact": 0,
+      "lowerBound": 0
+    },
+    "telemetryAcquisitionLosses": {
+      "breakdown": {
+        "known_dropped_samples": 0,
+        "malformed_samples": 0,
+        "recording_limit": 0,
+        "recording_persistence": 0,
+        "sequence_gap_lower_bound": 0
+      },
+      "lowerBound": 0
+    }
+  },
+  "completed-2": {
+    "eventCount": 134,
+    "sampleCount": 8,
+    "requestOutcomes": [
+      {
+        "finishReason": "length",
+        "outputTokens": 128,
+        "requestId": "q-a2dfd032d3e74f68bd3a03c3df1dfe9b"
+      }
+    ],
+    "requests": [
+      {
+        "decodeDurationNs": 826183000,
+        "outputTokens": 128,
+        "promptTokens": 18,
+        "requestId": "q-a2dfd032d3e74f68bd3a03c3df1dfe9b",
+        "ttftNs": 30010167
+      }
+    ],
+    "eventAcquisitionLosses": {
+      "breakdown": {
+        "connection_commands": 0,
+        "event_buffer": 0,
+        "ingest_chunk_lower_bound": 0,
+        "producer_reported": 0,
+        "producer_sequence_gap_lower_bound": 0,
+        "recording_limit": 0,
+        "recording_persistence": 0,
+        "recording_validation": 0,
+        "sequence_integrity_violations": 0,
+        "socket_parser": 0,
+        "status_notifications": 0
+      },
+      "exact": 0,
+      "lowerBound": 0
+    },
+    "telemetryAcquisitionLosses": {
+      "breakdown": {
+        "known_dropped_samples": 0,
+        "malformed_samples": 0,
+        "recording_limit": 0,
+        "recording_persistence": 0,
+        "sequence_gap_lower_bound": 0
+      },
+      "lowerBound": 0
+    }
+  },
+  "cancelled": {
+    "eventCount": 3,
+    "sampleCount": 3,
+    "requestOutcomes": [
+      {
+        "finishReason": "incomplete",
+        "requestId": "q-9137315ad17d4139aa7edd234983b332"
+      }
+    ],
+    "requests": [],
+    "eventAcquisitionLosses": {
+      "breakdown": {
+        "connection_commands": 0,
+        "event_buffer": 0,
+        "ingest_chunk_lower_bound": 0,
+        "producer_reported": 0,
+        "producer_sequence_gap_lower_bound": 0,
+        "recording_limit": 0,
+        "recording_persistence": 0,
+        "recording_validation": 0,
+        "sequence_integrity_violations": 0,
+        "socket_parser": 0,
+        "status_notifications": 0
+      },
+      "lowerBound": 0
+    },
+    "telemetryAcquisitionLosses": {
+      "breakdown": {
+        "known_dropped_samples": 0,
+        "malformed_samples": 0,
+        "recording_limit": 0,
+        "recording_persistence": 0,
+        "sequence_gap_lower_bound": 0
+      },
+      "lowerBound": 0
+    }
+  }
+}

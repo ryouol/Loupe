@@ -45,6 +45,16 @@ public struct LlamaCompletionChunk: Decodable, Sendable, Equatable {
     public let content: String
     public let stop: Bool
     public let timings: LlamaTimings?
+    public var tokensPredicted: Int? = nil
+    public var tokensEvaluated: Int? = nil
+    public var stopType: String? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case content, stop, timings
+        case tokensPredicted = "tokens_predicted"
+        case tokensEvaluated = "tokens_evaluated"
+        case stopType = "stop_type"
+    }
 }
 
 /// KV cache size computed from architecture parameters — the spec forbids
