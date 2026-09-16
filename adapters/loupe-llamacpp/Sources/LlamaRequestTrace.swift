@@ -16,7 +16,8 @@ public enum LlamaRequestTrace {
     ) -> [EventEnvelope] {
         // The server is untrusted input: NaN/inf timings must become an
         // error trace, not a UInt64-conversion trap.
-        guard let timings = chunks.last?.timings ?? chunks.compactMap(\.timings).last,
+        guard chunks.last?.stop == true,
+            let timings = chunks.last?.timings,
             timings.promptN >= 0, timings.predictedN >= 0,
             timings.promptMs.isFinite, timings.promptMs >= 0,
             timings.predictedMs.isFinite, timings.predictedMs >= 0,
@@ -41,13 +42,11 @@ public enum LlamaRequestTrace {
             ])
         }
 
-        let promptTokens = UInt32(clamping: timings.promptN)
+        let evaluated = chunks.last?.tokensEvaluated ?? timings.promptN
+        let promptTokens = UInt32(clamping: max(0, evaluated))
         let promptDurationNs = nanoseconds(milliseconds: timings.promptMs)
-        let predictedDurationNs = nanoseconds(milliseconds: timings.predictedMs)
-        // llama.cpp's predicted_ms is the runtime's full generation window,
-        // including the first predicted token. This is the same boundary
-        // Loupe derives for MLX (prefill end → request end). The rate is a
-        // consistency fallback only for older servers that report zero ms.
+        // Keep the server-reported generation interval. It is not GPU kernel
+        // time, and current llama.cpp excludes the first token from its rate.
         let measuredDecodeDurationNs = decodeDuration(
             outputTokens: timings.predictedN,
             milliseconds: timings.predictedMs,
@@ -80,9 +79,10 @@ public enum LlamaRequestTrace {
         // server's allocator; per-process RSS is the daemon's job.
         var produced = 0
         for (index, chunk) in chunks.enumerated() where !chunk.content.isEmpty {
-            produced += 1
+            let next = produced == Int.max ? Int.max : produced + 1
+            produced = min(timings.predictedN, max(produced, chunk.tokensPredicted ?? next))
             let ts = index < chunkArrivalsNs.count ? chunkArrivalsNs[index] : prefillEndNs
-            let tokenTotal = timings.promptN.addingReportingOverflow(produced)
+            let tokenTotal = max(0, evaluated).addingReportingOverflow(produced)
             events.append(
                 EventEnvelope(
                     ts: max(ts, prefillEndNs), runId: runId, requestId: requestId,
@@ -95,16 +95,14 @@ public enum LlamaRequestTrace {
                             memoryProvenance: .architectureModeledKV))))
         }
 
-        let modeledEnd = adding(
-            adding(promptDurationNs, to: predictedDurationNs), to: requestStartNs)
-        let endNs = max(chunkArrivalsNs.last ?? prefillEndNs, modeledEnd)
+        let endNs = max(chunkArrivalsNs.last ?? prefillEndNs, prefillEndNs)
         events.append(
             EventEnvelope(
                 ts: endNs, runId: runId, requestId: requestId,
                 payload: .requestEnd(
                     RequestEndPayload(
                         outputTokens: UInt32(clamping: timings.predictedN),
-                        finishReason: chunks.last?.stop == true ? "stop" : "length",
+                        finishReason: chunks.last?.stopType == "limit" ? "length" : "stop",
                         decodeDurationNs: measuredDecodeDurationNs))))
         return sequenced(events)
     }

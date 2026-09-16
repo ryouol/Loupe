@@ -840,7 +840,12 @@ public actor SessionRecorder {
         let accepted = Array(sequencedSamples.prefix(remaining))
         do {
             if !accepted.isEmpty {
-                try await store.append(samples: accepted)
+                // Stop/re-attachment cancels the sampler task. GRDB rejects
+                // writes inherited from that cancelled task, including its
+                // accepted tail, so finish this bounded write independently.
+                try await Task.detached {
+                    try await store.append(samples: accepted)
+                }.value
                 manifest?.sampleCount += accepted.count
             }
         } catch {
