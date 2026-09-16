@@ -1,0 +1,3 @@
+benchmarks/** linguist-generated=true
+*.csv whitespace=cr-at-eol
+docs/performance/*.svg linguist-generated=true -whitespace

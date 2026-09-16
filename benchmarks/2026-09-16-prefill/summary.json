@@ -1,0 +1,181 @@
+{
+  "scope": "local synthetic prompts; no task-accuracy claim",
+  "conditions": [
+    {
+      "context_tokens": 128,
+      "output_limit": 32,
+      "prefill_step": 64,
+      "n": 3,
+      "client_ttft_ms": {
+        "median": 141.965625,
+        "min": 140.704291,
+        "max": 150.019458
+      },
+      "client_total_ms": {
+        "median": 275.749167,
+        "min": 275.742416,
+        "max": 285.026042
+      },
+      "peak_allocator_bytes": {
+        "median": 375681524,
+        "min": 375681524,
+        "max": 375681524
+      },
+      "identical_output_token_ids_across_steps_and_repeats": true
+    },
+    {
+      "context_tokens": 128,
+      "output_limit": 32,
+      "prefill_step": 512,
+      "n": 3,
+      "client_ttft_ms": {
+        "median": 130.638875,
+        "min": 126.577708,
+        "max": 131.371417
+      },
+      "client_total_ms": {
+        "median": 265.477542,
+        "min": 265.444417,
+        "max": 307.121542
+      },
+      "peak_allocator_bytes": {
+        "median": 410464756,
+        "min": 400208348,
+        "max": 422326772
+      },
+      "identical_output_token_ids_across_steps_and_repeats": true
+    },
+    {
+      "context_tokens": 128,
+      "output_limit": 128,
+      "prefill_step": 64,
+      "n": 3,
+      "client_ttft_ms": {
+        "median": 138.949917,
+        "min": 137.567417,
+        "max": 143.176333
+      },
+      "client_total_ms": {
+        "median": 705.4575,
+        "min": 667.782792,
+        "max": 706.532792
+      },
+      "peak_allocator_bytes": {
+        "median": 366916084,
+        "min": 354222468,
+        "max": 380285452
+      },
+      "identical_output_token_ids_across_steps_and_repeats": true
+    },
+    {
+      "context_tokens": 128,
+      "output_limit": 128,
+      "prefill_step": 512,
+      "n": 3,
+      "client_ttft_ms": {
+        "median": 142.077791,
+        "min": 137.039875,
+        "max": 147.542708
+      },
+      "client_total_ms": {
+        "median": 670.571208,
+        "min": 666.2285,
+        "max": 675.156
+      },
+      "peak_allocator_bytes": {
+        "median": 422326772,
+        "min": 416002548,
+        "max": 429371916
+      },
+      "identical_output_token_ids_across_steps_and_repeats": true
+    },
+    {
+      "context_tokens": 2048,
+      "output_limit": 32,
+      "prefill_step": 64,
+      "n": 3,
+      "client_ttft_ms": {
+        "median": 880.977583,
+        "min": 879.393417,
+        "max": 883.712334
+      },
+      "client_total_ms": {
+        "median": 1044.960833,
+        "min": 1042.631667,
+        "max": 1048.246084
+      },
+      "peak_allocator_bytes": {
+        "median": 395400644,
+        "min": 392582596,
+        "max": 400790996
+      },
+      "identical_output_token_ids_across_steps_and_repeats": true
+    },
+    {
+      "context_tokens": 2048,
+      "output_limit": 32,
+      "prefill_step": 512,
+      "n": 3,
+      "client_ttft_ms": {
+        "median": 618.533042,
+        "min": 616.185542,
+        "max": 621.994375
+      },
+      "client_total_ms": {
+        "median": 781.8465,
+        "min": 779.518,
+        "max": 785.90425
+      },
+      "peak_allocator_bytes": {
+        "median": 702699020,
+        "min": 702699020,
+        "max": 712525252
+      },
+      "identical_output_token_ids_across_steps_and_repeats": true
+    },
+    {
+      "context_tokens": 2048,
+      "output_limit": 128,
+      "prefill_step": 64,
+      "n": 3,
+      "client_ttft_ms": {
+        "median": 885.023292,
+        "min": 882.926667,
+        "max": 899.18975
+      },
+      "client_total_ms": {
+        "median": 1537.857958,
+        "min": 1537.136458,
+        "max": 1550.597625
+      },
+      "peak_allocator_bytes": {
+        "median": 396498388,
+        "min": 396498388,
+        "max": 396793296
+      },
+      "identical_output_token_ids_across_steps_and_repeats": true
+    },
+    {
+      "context_tokens": 2048,
+      "output_limit": 128,
+      "prefill_step": 512,
+      "n": 3,
+      "client_ttft_ms": {
+        "median": 623.485333,
+        "min": 620.79525,
+        "max": 633.015125
+      },
+      "client_total_ms": {
+        "median": 1272.535875,
+        "min": 1271.544833,
+        "max": 1286.2925
+      },
+      "peak_allocator_bytes": {
+        "median": 702699020,
+        "min": 702699020,
+        "max": 709510596
+      },
+      "identical_output_token_ids_across_steps_and_repeats": true
+    }
+  ]
+}

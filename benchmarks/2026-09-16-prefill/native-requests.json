@@ -1,0 +1,261 @@
+[
+  {
+    "decodeDurationNs" : 218871918,
+    "outputTokens" : 32,
+    "promptTokens" : 128,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-1",
+    "ttftNs" : 870110792
+  },
+  {
+    "decodeDurationNs" : 209079292,
+    "outputTokens" : 32,
+    "promptTokens" : 128,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-2",
+    "ttftNs" : 137929250
+  },
+  {
+    "decodeDurationNs" : 208248876,
+    "outputTokens" : 32,
+    "promptTokens" : 128,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-3",
+    "ttftNs" : 140582084
+  },
+  {
+    "decodeDurationNs" : 204929835,
+    "outputTokens" : 32,
+    "promptTokens" : 128,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-4",
+    "ttftNs" : 131237459
+  },
+  {
+    "decodeDurationNs" : 251448584,
+    "outputTokens" : 32,
+    "promptTokens" : 128,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-5",
+    "ttftNs" : 126460834
+  },
+  {
+    "decodeDurationNs" : 208102792,
+    "outputTokens" : 32,
+    "promptTokens" : 128,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-6",
+    "ttftNs" : 141830292
+  },
+  {
+    "decodeDurationNs" : 215164167,
+    "outputTokens" : 32,
+    "promptTokens" : 128,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-7",
+    "ttftNs" : 149883625
+  },
+  {
+    "decodeDurationNs" : 206055791,
+    "outputTokens" : 32,
+    "promptTokens" : 128,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-8",
+    "ttftNs" : 130509458
+  },
+  {
+    "decodeDurationNs" : 604254876,
+    "outputTokens" : 128,
+    "promptTokens" : 128,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-9",
+    "ttftNs" : 134331792
+  },
+  {
+    "decodeDurationNs" : 600571501,
+    "outputTokens" : 128,
+    "promptTokens" : 128,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-10",
+    "ttftNs" : 132588292
+  },
+  {
+    "decodeDurationNs" : 602400375,
+    "outputTokens" : 128,
+    "promptTokens" : 128,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-11",
+    "ttftNs" : 137429834
+  },
+  {
+    "decodeDurationNs" : 604261291,
+    "outputTokens" : 128,
+    "promptTokens" : 128,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-12",
+    "ttftNs" : 136794041
+  },
+  {
+    "decodeDurationNs" : 604098250,
+    "outputTokens" : 128,
+    "promptTokens" : 128,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-13",
+    "ttftNs" : 141942334
+  },
+  {
+    "decodeDurationNs" : 638931335,
+    "outputTokens" : 128,
+    "promptTokens" : 128,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-14",
+    "ttftNs" : 138835792
+  },
+  {
+    "decodeDurationNs" : 636616709,
+    "outputTokens" : 128,
+    "promptTokens" : 128,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-15",
+    "ttftNs" : 143021459
+  },
+  {
+    "decodeDurationNs" : 613263834,
+    "outputTokens" : 128,
+    "promptTokens" : 128,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-16",
+    "ttftNs" : 147422833
+  },
+  {
+    "decodeDurationNs" : 230879541,
+    "outputTokens" : 32,
+    "promptTokens" : 2048,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-17",
+    "ttftNs" : 884856541
+  },
+  {
+    "decodeDurationNs" : 234806291,
+    "outputTokens" : 32,
+    "promptTokens" : 2048,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-18",
+    "ttftNs" : 624808041
+  },
+  {
+    "decodeDurationNs" : 233873001,
+    "outputTokens" : 32,
+    "promptTokens" : 2048,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-19",
+    "ttftNs" : 879256625
+  },
+  {
+    "decodeDurationNs" : 232018792,
+    "outputTokens" : 32,
+    "promptTokens" : 2048,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-20",
+    "ttftNs" : 618272292
+  },
+  {
+    "decodeDurationNs" : 232024125,
+    "outputTokens" : 32,
+    "promptTokens" : 2048,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-21",
+    "ttftNs" : 615933208
+  },
+  {
+    "decodeDurationNs" : 237394792,
+    "outputTokens" : 32,
+    "promptTokens" : 2048,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-22",
+    "ttftNs" : 880826958
+  },
+  {
+    "decodeDurationNs" : 237102166,
+    "outputTokens" : 32,
+    "promptTokens" : 2048,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-23",
+    "ttftNs" : 883579875
+  },
+  {
+    "decodeDurationNs" : 231668585,
+    "outputTokens" : 32,
+    "promptTokens" : 2048,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-24",
+    "ttftNs" : 621866625
+  },
+  {
+    "decodeDurationNs" : 722682834,
+    "outputTokens" : 128,
+    "promptTokens" : 2048,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-25",
+    "ttftNs" : 882127250
+  },
+  {
+    "decodeDurationNs" : 717955708,
+    "outputTokens" : 128,
+    "promptTokens" : 2048,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-26",
+    "ttftNs" : 616027458
+  },
+  {
+    "decodeDurationNs" : 720427499,
+    "outputTokens" : 128,
+    "promptTokens" : 2048,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-27",
+    "ttftNs" : 884881000
+  },
+  {
+    "decodeDurationNs" : 720567085,
+    "outputTokens" : 128,
+    "promptTokens" : 2048,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-28",
+    "ttftNs" : 620452667
+  },
+  {
+    "decodeDurationNs" : 731633125,
+    "outputTokens" : 128,
+    "promptTokens" : 2048,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-29",
+    "ttftNs" : 632863875
+  },
+  {
+    "decodeDurationNs" : 727931626,
+    "outputTokens" : 128,
+    "promptTokens" : 2048,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-30",
+    "ttftNs" : 882785958
+  },
+  {
+    "decodeDurationNs" : 728777833,
+    "outputTokens" : 128,
+    "promptTokens" : 2048,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-31",
+    "ttftNs" : 899055250
+  },
+  {
+    "decodeDurationNs" : 719139375,
+    "outputTokens" : 128,
+    "promptTokens" : 2048,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-32",
+    "ttftNs" : 622409250
+  },
+  {
+    "decodeDurationNs" : 605999293,
+    "outputTokens" : 128,
+    "promptTokens" : 128,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-33",
+    "ttftNs" : 135295958
+  },
+  {
+    "decodeDurationNs" : 602201459,
+    "outputTokens" : 128,
+    "promptTokens" : 128,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-34",
+    "ttftNs" : 132006417
+  },
+  {
+    "decodeDurationNs" : 610700667,
+    "outputTokens" : 128,
+    "promptTokens" : 128,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-35",
+    "ttftNs" : 134069375
+  },
+  {
+    "decodeDurationNs" : 752165668,
+    "outputTokens" : 128,
+    "promptTokens" : 2048,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-37",
+    "ttftNs" : 903324375
+  },
+  {
+    "decodeDurationNs" : 780956292,
+    "outputTokens" : 128,
+    "promptTokens" : 2048,
+    "requestId" : "q-07736c8865484a82916fa6fc51f8f085-38",
+    "ttftNs" : 647196625
+  }
+]

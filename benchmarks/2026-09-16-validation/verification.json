@@ -1,0 +1,14 @@
+{
+  "date": "2026-09-16",
+  "local_checks": {
+    "swift_build_all": "passed",
+    "python_tests": "78 passed; 1 pre-existing optional test skipped",
+    "swift_format": "passed",
+    "ruff": "passed",
+    "helper_boundary": "passed",
+    "bundled_sample": "passed",
+    "native_real_capture_replay": "37 completed requests; 1 cancellation excluded; Python TTFT agreement; zero parser drops",
+    "local_make_test": "blocked: full Xcode/XCTest absent; workflow runs full make test on macos-15"
+  },
+  "serving_import": "fixture-tested only; no real vLLM/Unrender capture"
+}

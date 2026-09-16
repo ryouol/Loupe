@@ -41,6 +41,7 @@ public enum SessionMetrics {
             var promptTokens = 0
             var endTs: UInt64?
             var outputTokens = 0
+            var finishReason: String?
             var runtimeDecodeDurationNs: UInt64?
             var protocolVersion = EventProtocol.legacyVersion
             var order: Int
@@ -66,6 +67,7 @@ public enum SessionMetrics {
             case .requestEnd(let payload):
                 partials[requestId, default: Partial(order: order)].endTs = envelope.ts
                 partials[requestId]?.outputTokens = Int(payload.outputTokens)
+                partials[requestId]?.finishReason = payload.finishReason
                 partials[requestId]?.runtimeDecodeDurationNs = payload.decodeDurationNs
             default:
                 break
@@ -77,7 +79,9 @@ public enum SessionMetrics {
             .compactMap { requestId, partial -> (Int, RequestMetrics)? in
                 guard let start = partial.startTs, let prefill = partial.prefillTs,
                     let firstOutput = partial.firstOutputTs, let end = partial.endTs,
-                    prefill >= start, firstOutput >= prefill, end >= firstOutput
+                    prefill >= start, firstOutput >= prefill, end >= firstOutput,
+                    partial.outputTokens > 0,
+                    ["stop", "length", "eos"].contains(partial.finishReason ?? "")
                 else { return nil }
                 let decodeDuration: UInt64
                 if let measured = partial.runtimeDecodeDurationNs {

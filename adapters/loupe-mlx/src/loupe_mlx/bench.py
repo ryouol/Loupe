@@ -1,7 +1,8 @@
 """One benchmark run: a single request at an exact prompt length, events to a
 file. Driven by loupe-bench once per (context x repeat); one request per
-process keeps every measured run cold-state-fair, and the harness's warmup
-runs absorb the load costs.
+process keeps every measured run cold-state-fair. Warmups can warm OS caches,
+but cannot warm the model instance in a subsequent process. Use investigate
+for repeated measurements of one resident model.
 
 Same `LoupeInstrument` as the live adapter, file sink instead of socket.
 """

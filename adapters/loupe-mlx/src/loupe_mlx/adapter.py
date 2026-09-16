@@ -13,8 +13,9 @@ Usage:
 
 Instrumentation must be invisible to the generation loop: the live socket
 sink is a non-blocking queue put with counted drops (see socket_writer), the
-recorder/bench file sink is a local flush whose cost the harness's warmup
-absorbs, and the generator yields mlx-lm's responses unchanged.
+recorder/bench file sink flushes locally on every event. That cost remains
+inside measured requests; investigate measures it with paired controls.
+The generator yields mlx-lm's responses unchanged.
 """
 
 from __future__ import annotations

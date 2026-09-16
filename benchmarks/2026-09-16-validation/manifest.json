@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "source_commit": "2379a09ac0885a0ce97f82488db18a24f8860317",
+  "source_files_sha256": {
+    "events.py": "39485a81785ca810646c7ce17d9e596dad9b2b9f2f57bc3d3724ca60015cbeef",
+    "adapter.py": "b14d914aca1b75bf5351729656653ec8457a97db6f81965da0b4deaf4b1a35f9",
+    "__init__.py": "925da750baea77cf001346eb28e9b7ef79e485cce133e58c7435e5edd6ffa1cf",
+    "bench.py": "bce1da8a2e4e290ddb6f3d60fd4dd8028b7939e744657ba1115b3dac249c054f",
+    "timebase.py": "cbc1bf1ed7303bd35cbf59d4170db88af5af9d91f1077771d0dac8152b2c3acf",
+    "record.py": "ac2ea05d6de8fa835dad30d4f15a777abf5f1c979b00efda8a3ae6a222122a64",
+    "import_serving.py": "a9e2b208c388dd418041244ff03faca7c2817d9be78ab67679b7f6050c20243f",
+    "socket_writer.py": "2730e4e7a4a1751e3d7cf319c09eade698ce478d5dff102cc3cd762727ac2d6b",
+    "investigate.py": "25027529c7877d5c2c321c75ff90e5324a4cd90744a54773e97c21150131a25e"
+  },
+  "model_revision": "a5339a4131f135d0fdc6a5c8b5bbed2753bbe0f3",
+  "model_files_sha256": {
+    "added_tokens.json": "58b54bbe36fc752f79a24a271ef66a0a0830054b4dfad94bde757d851968060b",
+    "config.json": "b045e57ea90b8f1b35f89f954b176a5c1faa02bd0af2c89bcec191239d66cef4",
+    "model.safetensors": "ddffab9cbc7bf6dde941c6724841eeca8981fcfa81ca20ff8efff1396326d153",
+    "model.safetensors.index.json": "54001cb4c11197119c206dde28e7be08e5872aab6c6d271aed339ec77e84f870",
+    "special_tokens_map.json": "76862e765266b85aa9459767e33cbaf13970f327a0e88d1c65846c2ddd3a1ecd",
+    "tokenizer.json": "a8506e7111b80c6d8635951a02eab0f4e1a8e4e5772da83846579e97b16f61bf",
+    "tokenizer_config.json": "f7c61e32b7a17d19bf8e7037dcb74079a833e53ea9801f24008cac68458f03b7",
+    "vocab.json": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+  },
+  "device": {
+    "device_name": "Apple M1 Pro",
+    "max_recommended_working_set_size": 12713115648,
+    "memory_size": 17179869184,
+    "architecture": "applegpu_g13s",
+    "max_buffer_length": 9534832640,
+    "resource_limit": 499000
+  },
+  "os": "26.6.2",
+  "python": "3.14.2",
+  "versions": {
+    "mlx": "0.32.2",
+    "mlx-lm": "0.31.3",
+    "transformers": "5.16.1"
+  },
+  "dependency_lock_sha256": "57bc8a6740ab4e5fdf0186e61dbdefacf21b57f4f3c6a5c81fb10d3381726283",
+  "contexts": [
+    128,
+    2048
+  ],
+  "outputs": [
+    32,
+    128
+  ],
+  "prefill_steps": [
+    64,
+    512
+  ],
+  "repeats": 3,
+  "sampling": "greedy; seed 42 reset per request; fresh KV cache per request",
+  "prompt": "synthetic filler token IDs, exactly truncated; no chat template",
+  "clock": "mach_continuous_time nanoseconds; client and adapter in same process",
+  "ttft_boundary": "first generated token response, possibly empty decoded text; text TTFT separate",
+  "measurement": "unprofiled; resident model; one warmup per condition; alternating step order",
+  "model_load_ms": 573.346709,
+  "source_commit_note": "Base HEAD at capture time; source_files_sha256 identifies the measured working-tree Python files."
+}

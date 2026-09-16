@@ -1,5 +1,8 @@
 # Loupe
 
+Performance work: [real MLX prefill investigation](docs/performance/2026-09-16-prefill.md),
+[reproduction and offline serving imports](docs/performance/README.md).
+
 **See what happens during local AI inference.** Native macOS profiling for Apple Silicon.
 
 [![CI](https://github.com/ryouol/Loupe/actions/workflows/ci.yml/badge.svg)](https://github.com/ryouol/Loupe/actions/workflows/ci.yml)

@@ -1,0 +1,48 @@
+         384675 function calls (382787 primitive calls) in 2.921 seconds
+
+   Ordered by: cumulative time
+   List reduced from 101 to 40 due to restriction <40>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        2    0.005    0.002    2.923    1.461 investigate.py:128(run)
+      258    0.014    0.000    2.917    0.011 adapter.py:125(stream_generate)
+      258    0.005    0.000    2.876    0.011 generate.py:657(stream_generate)
+      258    0.000    0.000    2.671    0.010 generate.py:705(<genexpr>)
+      258    2.320    0.009    2.670    0.010 generate.py:307(generate_step)
+      294    0.001    0.000    0.342    0.001 generate.py:388(_model_call)
+      294    0.001    0.000    0.341    0.001 qwen2.py:167(__call__)
+      294    0.005    0.000    0.339    0.001 qwen2.py:137(__call__)
+     7056    0.022    0.000    0.330    0.000 qwen2.py:111(__call__)
+      258    0.005    0.000    0.311    0.001 generate.py:396(_step)
+     7056    0.057    0.000    0.236    0.000 qwen2.py:57(__call__)
+        2    0.000    0.000    0.181    0.090 tokenizer_utils.py:450(detokenizer)
+        2    0.017    0.009    0.181    0.090 tokenizer_utils.py:165(__init__)
+      264    0.000    0.000    0.163    0.001 tokenizer_utils.py:457(__getattr__)
+      268    0.000    0.000    0.163    0.001 {built-in method builtins.getattr}
+        4    0.000    0.000    0.163    0.041 tokenization_utils_tokenizers.py:676(vocab)
+        4    0.000    0.000    0.163    0.041 tokenization_utils_tokenizers.py:673(get_vocab)
+        4    0.163    0.041    0.163    0.041 {method 'get_vocab' of 'tokenizers.Tokenizer' objects}
+     7056    0.078    0.000    0.078    0.000 cache.py:333(update_and_fetch)
+    49392    0.067    0.000    0.073    0.000 quantized.py:270(__call__)
+     7056    0.024    0.000    0.054    0.000 qwen2.py:94(__call__)
+    93498    0.023    0.000    0.033    0.000 base.py:99(__getattr__)
+    14112    0.026    0.000    0.026    0.000 positional_encoding.py:46(__call__)
+      262    0.001    0.000    0.023    0.000 adapter.py:327(_emit)
+      262    0.001    0.000    0.020    0.000 socket_writer.py:58(emit)
+   144812    0.017    0.000    0.017    0.000 {method 'get' of 'dict' objects}
+        4    0.000    0.000    0.013    0.003 {built-in method builtins.next}
+        4    0.011    0.003    0.013    0.003 generate.py:229(wired_limit)
+        2    0.000    0.000    0.011    0.005 contextlib.py:145(__exit__)
+      262    0.001    0.000    0.011    0.000 events.py:381(encode_line)
+    14406    0.009    0.000    0.009    0.000 normalization.py:163(__call__)
+     7056    0.008    0.000    0.009    0.000 base.py:108(scaled_dot_product_attention)
+      262    0.009    0.000    0.009    0.000 {method 'flush' of '_io.BufferedWriter' objects}
+      264    0.001    0.000    0.008    0.000 __init__.py:185(dumps)
+      264    0.001    0.000    0.007    0.000 encoder.py:185(encode)
+      256    0.002    0.000    0.005    0.000 tokenizer_utils.py:206(add_token)
+      264    0.005    0.000    0.005    0.000 encoder.py:207(iterencode)
+      518    0.004    0.000    0.004    0.000 timebase.py:23(now_ns)
+      294    0.003    0.000    0.003    0.000 quantized.py:149(__call__)
+      256    0.002    0.000    0.003    0.000 tokenizer_utils.py:185(_decode_bytes)
+
+
