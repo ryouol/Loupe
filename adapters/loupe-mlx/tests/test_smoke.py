@@ -7,7 +7,7 @@ from loupe_mlx import DEFAULT_SOCKET_PATH, LoupeInstrument, __version__
 
 
 def test_package_surface() -> None:
-    assert __version__ == "0.2.0"
+    assert __version__ == "0.2.1"
     assert DEFAULT_SOCKET_PATH.endswith(".sock")
     assert LoupeInstrument is not None
 
@@ -139,7 +139,8 @@ def test_one_token_early_stop_includes_first_token_interval(monkeypatch) -> None
         finish_reason="eos",
     )
 
-    def generate(*_args, **_kwargs):
+    def generate(*_args, **kwargs):
+        kwargs["prompt_progress_callback"](7, 8)
         yield response
 
     install_fake_runtime(monkeypatch, generate)
@@ -147,7 +148,7 @@ def test_one_token_early_stop_includes_first_token_interval(monkeypatch) -> None
     loupe = LoupeInstrument(
         run_id="r-rate",
         writer=sink,
-        clock=SequenceClock([100, 100, 1_000_000_000, 1_140_000_000, 1_150_000_000]),
+        clock=SequenceClock([100, 100, 1_000_000_000, 1_100_000_000, 1_140_000_000, 1_150_000_000]),
     )
     assert len(list(loupe.stream_generate(object(), object(), prompt="x"))) == 1
     loupe.close()
@@ -174,7 +175,8 @@ def test_consumer_early_stop_closes_the_same_decode_window(monkeypatch) -> None:
         finish_reason=None,
     )
 
-    def generate(*_args, **_kwargs):
+    def generate(*_args, **kwargs):
+        kwargs["prompt_progress_callback"](7, 8)
         yield response
         yield response
 
@@ -183,7 +185,9 @@ def test_consumer_early_stop_closes_the_same_decode_window(monkeypatch) -> None:
     loupe = LoupeInstrument(
         run_id="r-cancel",
         writer=sink,
-        clock=SequenceClock([100, 100, 1_000_000_000, 1_140_000_000, 1_170_000_000, 1_180_000_000]),
+        clock=SequenceClock(
+            [100, 100, 1_000_000_000, 1_100_000_000, 1_140_000_000, 1_170_000_000, 1_180_000_000]
+        ),
     )
     generated = loupe.stream_generate(object(), object(), prompt="x")
     next(generated)
@@ -268,3 +272,45 @@ def test_concurrent_generation_is_rejected_and_close_waits_for_request_end(monke
     assert [event.ts for event in sink.events] == sorted(event.ts for event in sink.events)
     with pytest.raises(RuntimeError, match="closed"):
         list(loupe.stream_generate(object(), object(), prompt="after-close"))
+
+
+def test_missing_runtime_boundary_does_not_invent_decode_time(monkeypatch):
+    response = types.SimpleNamespace(prompt_tokens=8, prompt_tps=80.0, finish_reason="stop")
+
+    def generate(*_args, **_kwargs):
+        yield response
+
+    install_fake_runtime(monkeypatch, generate)
+    sink = CollectingSink()
+    loupe = LoupeInstrument(writer=sink, clock=SequenceClock([1, 2, 100, 200, 300]))
+    list(loupe.stream_generate(object(), object(), "x"))
+    loupe.close()
+    end = next(e.payload for e in sink.events if e.event == "request_end")
+    assert end.decode_duration_ns is None
+
+
+def test_prefill_boundary_observed_after_host_setup_and_callback_forwarded(monkeypatch):
+    response = types.SimpleNamespace(prompt_tokens=8, prompt_tps=800.0, finish_reason="length")
+    forwarded = []
+
+    def generate(*_args, **kwargs):
+        kwargs["prompt_progress_callback"](0, 8)
+        kwargs["prompt_progress_callback"](7, 8)
+        kwargs["prompt_progress_callback"](8, 8)
+        yield response
+
+    install_fake_runtime(monkeypatch, generate)
+    sink = CollectingSink()
+    loupe = LoupeInstrument(writer=sink, clock=SequenceClock([1, 2, 100, 900, 1000, 1100]))
+    list(
+        loupe.stream_generate(
+            object(), object(), "x", prompt_progress_callback=lambda p, t: forwarded.append((p, t))
+        )
+    )
+    loupe.close()
+    assert forwarded == [(0, 8), (7, 8), (8, 8)]
+    boundary = next(e for e in sink.events if e.event == "prefill_end")
+    assert boundary.ts == 900
+    assert (
+        next(e.payload for e in sink.events if e.event == "request_end").decode_duration_ns == 100
+    )

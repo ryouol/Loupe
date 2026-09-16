@@ -13,13 +13,13 @@ Usage:
 
 Instrumentation must be invisible to the generation loop: the live socket
 sink is a non-blocking queue put with counted drops (see socket_writer), the
-recorder/bench file sink is a local flush whose cost the harness's warmup
-absorbs, and the generator yields mlx-lm's responses unchanged.
+recorder/bench file sink flushes locally on each event. Measure its overhead
+separately; warmup does not remove per-event I/O. The generator yields mlx-lm's
+responses unchanged.
 """
 
 from __future__ import annotations
 
-import math
 import os
 import threading
 import uuid
@@ -32,7 +32,7 @@ from .timebase import now_ns
 
 DEFAULT_SOCKET_PATH = os.path.expanduser("~/Library/Application Support/Loupe/runtime/adapter.sock")
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 
 class LoupeInstrument:
@@ -142,36 +142,37 @@ class LoupeInstrument:
             prefill_done = False
             decode_start_ns: int | None = None
             last_response_at_ns: int | None = None
+            caller_progress = kwargs.get("prompt_progress_callback")
+
+            def prompt_progress(processed: int, total: int) -> None:
+                nonlocal prefill_done, decode_start_ns
+                # mlx-lm evaluates all but the final prompt token in its prefill
+                # loop. This callback observes that boundary directly; the final
+                # prompt token's forward pass belongs to our first-token window.
+                if not prefill_done and total > 0 and processed == total - 1:
+                    decode_start_ns = self._clock()
+                    self._emit(
+                        ev.PrefillEnd(prompt_tokens=total), request_id, at_ns=decode_start_ns
+                    )
+                    prefill_done = True
+                if caller_progress is not None:
+                    caller_progress(processed, total)
+
+            kwargs["prompt_progress_callback"] = prompt_progress
             try:
                 for response in stream_generate(model, tokenizer, prompt=prompt, **kwargs):
                     response_at_ns = self._clock()
                     last_response_at_ns = response_at_ns
                     if not prefill_done:
+                        # A runtime path without progress callbacks (e.g. draft
+                        # generation) supplies only an observed upper bound. Do
+                        # not manufacture decode time from prompt_tps: that clock
+                        # excludes host setup and includes first-token evaluation.
                         prompt_tokens = int(getattr(response, "prompt_tokens", 0) or 0)
-                        prompt_tps = float(getattr(response, "prompt_tps", 0) or 0)
-                        if math.isfinite(prompt_tps) and prompt_tps > 0 and prompt_tokens > 0:
-                            prompt_duration_ns = int(prompt_tokens / prompt_tps * 1_000_000_000)
-                            prefill_end_ns = max(
-                                request_start_ns,
-                                min(
-                                    response_at_ns,
-                                    min(
-                                        ev.MAX_UINT64,
-                                        request_start_ns + max(1, prompt_duration_ns),
-                                    ),
-                                ),
-                            )
-                            decode_start_ns = prefill_end_ns
-                        else:
-                            # mlx-lm exposes no first-token boundary without its
-                            # prompt timing. Keep the milestone honest but leave
-                            # the full decode interval unavailable instead of
-                            # using generation_tps, whose clock starts after token 1.
-                            prefill_end_ns = response_at_ns
                         self._emit(
                             ev.PrefillEnd(prompt_tokens=prompt_tokens),
                             request_id,
-                            at_ns=prefill_end_ns,
+                            at_ns=response_at_ns,
                         )
                         prefill_done = True
                     produced += 1

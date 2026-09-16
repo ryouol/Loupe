@@ -49,6 +49,8 @@ public final class ReplayViewModel {
     public private(set) var packagePowerChartPoints: [ChartPoint] = []
     public private(set) var milestones: [Milestone] = []
     public private(set) var requestMetrics: [RequestMetrics] = []
+    public private(set) var requestOutcomeByID: [String: SessionEvidenceReport.RequestOutcome] = [:]
+    public private(set) var requestOutcomes: [SessionEvidenceReport.RequestOutcome] = []
     public private(set) var annotations: [AnnotationRow] = []
     public private(set) var decodeTickCount = 0
     public private(set) var totalEventCount = 0
@@ -103,6 +105,24 @@ public final class ReplayViewModel {
         packagePowerChartPoints = assembled.packagePowerChartPoints
         milestones = assembled.milestones
         requestMetrics = assembled.metrics
+        var outcomes: [String: SessionEvidenceReport.RequestOutcome] = [:]
+        var requestOrder: [String] = []
+        for envelope in eventsResult.envelopes {
+            guard let requestId = envelope.requestId else { continue }
+            switch envelope.payload {
+            case .requestStart:
+                requestOrder.append(requestId)
+                outcomes[requestId] = .init(
+                    requestId: requestId, finishReason: "incomplete", outputTokens: nil)
+            case .requestEnd(let payload):
+                outcomes[requestId] = .init(
+                    requestId: requestId, finishReason: payload.finishReason,
+                    outputTokens: payload.outputTokens)
+            default: break
+            }
+        }
+        requestOutcomes = requestOrder.compactMap { outcomes[$0] }
+        requestOutcomeByID = outcomes
         requestSpans = assembled.spans
         annotations = assembled.annotations
         decodeTickCount = assembled.decodeTickCount

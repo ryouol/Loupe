@@ -1,0 +1,15 @@
+{
+  "string": {
+    "collection_on_median_ms": 3622.980625,
+    "collection_off_median_ms": 3596.689375,
+    "on_minus_off_percent": 0.7309847267530589,
+    "repetitions_each": 5
+  },
+  "cached_bpe": {
+    "collection_on_median_ms": 3487.065292,
+    "collection_off_median_ms": 3489.702667,
+    "on_minus_off_percent": -0.07557592298449434,
+    "repetitions_each": 5
+  },
+  "limitation": "Separate sequential blocks; differences include system drift and are not an isolated instrumentation overhead estimate."
+}

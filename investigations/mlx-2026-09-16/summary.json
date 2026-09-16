@@ -1,0 +1,137 @@
+{
+  "conditions": [
+    {
+      "context": 128,
+      "output_limit": 32,
+      "repeats": 5,
+      "tokens_and_text_identical": true,
+      "cached_bpe": {
+        "ttft_median_ms": 46.252875,
+        "elapsed_median_ms": 175.999875,
+        "elapsed_ms": [
+          178.348416,
+          176.382208,
+          174.47975,
+          175.999875,
+          175.913333
+        ],
+        "host_setup_median_ms": 1.411583
+      },
+      "string": {
+        "ttft_median_ms": 138.194375,
+        "elapsed_median_ms": 275.212167,
+        "elapsed_ms": [
+          277.131084,
+          275.212167,
+          267.593208,
+          310.31175,
+          271.951542
+        ],
+        "host_setup_median_ms": 86.412166
+      }
+    },
+    {
+      "context": 128,
+      "output_limit": 128,
+      "repeats": 5,
+      "tokens_and_text_identical": true,
+      "cached_bpe": {
+        "ttft_median_ms": 45.312083,
+        "elapsed_median_ms": 571.221916,
+        "elapsed_ms": [
+          576.6435,
+          594.024416,
+          571.221916,
+          570.765292,
+          569.574
+        ],
+        "host_setup_median_ms": 1.383
+      },
+      "string": {
+        "ttft_median_ms": 146.044375,
+        "elapsed_median_ms": 698.758625,
+        "elapsed_ms": [
+          697.5055,
+          699.830583,
+          665.700667,
+          698.758625,
+          721.022
+        ],
+        "host_setup_median_ms": 98.239583
+      }
+    },
+    {
+      "context": 8192,
+      "output_limit": 32,
+      "repeats": 5,
+      "tokens_and_text_identical": true,
+      "cached_bpe": {
+        "ttft_median_ms": 2557.645334,
+        "elapsed_median_ms": 2790.750542,
+        "elapsed_ms": [
+          2768.456666,
+          2755.097333,
+          2792.276958,
+          2808.697833,
+          2790.750542
+        ],
+        "host_setup_median_ms": 12.283333
+      },
+      "string": {
+        "ttft_median_ms": 2654.691917,
+        "elapsed_median_ms": 2894.520458,
+        "elapsed_ms": [
+          2889.712417,
+          2877.256084,
+          2908.407459,
+          2945.942084,
+          2894.520458
+        ],
+        "host_setup_median_ms": 114.32425
+      }
+    },
+    {
+      "context": 8192,
+      "output_limit": 128,
+      "repeats": 5,
+      "tokens_and_text_identical": true,
+      "cached_bpe": {
+        "ttft_median_ms": 2551.063083,
+        "elapsed_median_ms": 3487.065292,
+        "elapsed_ms": [
+          3468.501209,
+          3487.065292,
+          3486.778625,
+          3506.113834,
+          3496.988208
+        ],
+        "host_setup_median_ms": 12.5685
+      },
+      "string": {
+        "ttft_median_ms": 2679.971542,
+        "elapsed_median_ms": 3622.980625,
+        "elapsed_ms": [
+          3570.636458,
+          3651.777208,
+          3622.980625,
+          3619.310542,
+          3623.548541
+        ],
+        "host_setup_median_ms": 116.138333
+      }
+    }
+  ],
+  "maximum_ttft_boundary_error_ms": 0.282,
+  "maximum_prefill_boundary_error_ms": 0.693459,
+  "maximum_decode_duration_error_ms": 0.518792,
+  "cold_process_load_ms": 480.0375,
+  "cache_setup_ms": 128.121375,
+  "cancelled_verified": true,
+  "truncated_request_omitted_from_metrics": true,
+  "truncated_outcome_preserved": true,
+  "missing_telemetry_rejected": true,
+  "acquisition_loss": "unknown; no recorder terminal acquisition summary",
+  "thermal_states": [
+    "nominal"
+  ]
+}

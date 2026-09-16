@@ -1,6 +1,6 @@
 [project]
 name = "loupe-mlx"
-version = "0.2.0"
+version = "0.2.1"
 description = "Instruments mlx-lm inference and streams events to the user-owned Loupe app."
 requires-python = ">=3.11"
 dependencies = []

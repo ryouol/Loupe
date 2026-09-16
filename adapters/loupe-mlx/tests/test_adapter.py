@@ -131,3 +131,29 @@ def test_adapter_overhead_under_one_percent() -> None:
         f"adapter overhead {overhead * 100:.2f}% exceeds 1% "
         f"(bare {bare_median:.3f}s vs instrumented {instrumented_median:.3f}s)"
     )
+
+
+def test_cached_bpe_preserves_tokens_text_and_independent_state():
+    from loupe_mlx.bpe_cache import cache_bpe_vocabulary
+    from mlx_lm.sample_utils import make_sampler
+
+    model, tokenizer = mlx_lm.load(MODEL)
+    cached = cache_bpe_vocabulary(tokenizer)
+    left, right = cached.detokenizer, cached.detokenizer
+    assert left is not right
+    assert left.tokenmap is right.tokenmap
+    assert isinstance(left.tokenmap, tuple)
+    assert left.tokens is not right.tokens
+    for prompt in ("What is 2 + 2?", "Translate café into Japanese:", "Count to ten:"):
+        baseline = list(
+            mlx_lm.stream_generate(
+                model, tokenizer, prompt, max_tokens=16, sampler=make_sampler(temp=0)
+            )
+        )
+        candidate = list(
+            mlx_lm.stream_generate(
+                model, cached, prompt, max_tokens=16, sampler=make_sampler(temp=0)
+            )
+        )
+        assert [r.token for r in candidate] == [r.token for r in baseline]
+        assert "".join(r.text for r in candidate) == "".join(r.text for r in baseline)

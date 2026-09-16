@@ -427,6 +427,11 @@ public struct ReplayView: View {
                     Text("\(metrics.outputTokens)").monospacedDigit()
                 }
                 .width(70)
+                TableColumn("Status") { metrics in
+                    Text(
+                        model.requestOutcomeByID[metrics.requestId]?
+                            .finishReason ?? "unknown")
+                }
                 TableColumn("TTFT") { metrics in
                     Text(String(format: "%.1f ms", metrics.ttftMs)).monospacedDigit()
                 }
