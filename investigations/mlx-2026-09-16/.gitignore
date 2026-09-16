@@ -1,0 +1,5 @@
+# Raw working copies are preserved in the hashed archive.
+baseline/
+bpe-cache/
+verified/
+collection-off/

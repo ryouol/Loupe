@@ -4,6 +4,11 @@ import LoupeCore
 import LoupeSampler
 
 public struct SessionEvidenceReport: Codable, Sendable, Equatable {
+    public struct RequestOutcome: Codable, Sendable, Equatable {
+        public let requestId: String
+        public let finishReason: String
+        public let outputTokens: UInt32?
+    }
     public struct Source: Codable, Sendable, Equatable {
         public let filename: String
         public let sha256: String
@@ -33,6 +38,7 @@ public struct SessionEvidenceReport: Codable, Sendable, Equatable {
     public let telemetryAcquisitionLosses: AcquisitionLossCount?
     public let thermalStates: [String]
     public let requests: [RequestMetrics]
+    public let requestOutcomes: [RequestOutcome]
     public let findings: [Finding]
 }
 
@@ -100,6 +106,13 @@ extension ReplayViewModel {
                     csvNumber(request.decodeTokensPerSecond, decimals: 3), "", "", "",
                 ].map(csvCell).joined(separator: ","))
         }
+        for outcome in report.requestOutcomes {
+            rows.append(
+                [
+                    "request_outcome", "finish_reason", outcome.finishReason, outcome.requestId,
+                    "", outcome.outputTokens.map(String.init) ?? "unknown", "", "", "", "", "",
+                ].map(csvCell).joined(separator: ","))
+        }
         for finding in report.findings {
             rows.append(
                 [
@@ -149,8 +162,8 @@ extension ReplayViewModel {
                 ])
         }
         return SessionEvidenceReport(
-            // v3 defines request TTFT as start → first observable output.
-            schemaVersion: 3,
+            // v4 preserves cancellation and incomplete requests alongside metrics.
+            schemaVersion: 4,
             generatedAt: Date(),
             sessionName: session.name,
             eventSource: .init(
@@ -169,6 +182,7 @@ extension ReplayViewModel {
             telemetryAcquisitionLosses: acquisitionMetadata?.telemetryLosses,
             thermalStates: thermalStatesSeen.map(\.rawValue).sorted(),
             requests: requestMetrics,
+            requestOutcomes: requestOutcomes,
             findings: annotations.map { annotation in
                 SessionEvidenceReport.Finding(
                     kind: annotation.kind.rawValue,

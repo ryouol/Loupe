@@ -93,7 +93,9 @@ final class LoupeAppTests: XCTestCase {
         XCTAssertEqual(model.acquisitionMetadata, metadata)
         let report = try JSONDecoder().decode(
             SessionEvidenceReport.self, from: model.evidenceJSON())
-        XCTAssertEqual(report.schemaVersion, 3)
+        XCTAssertEqual(report.schemaVersion, 4)
+        XCTAssertEqual(report.requestOutcomes.count, 1)
+        XCTAssertEqual(report.requestOutcomes.first?.finishReason, "stop")
         XCTAssertEqual(report.sessionName, "mini")
         XCTAssertEqual(report.eventSource.filename, "mini.ndjson")
         XCTAssertEqual(report.eventSource.sha256.count, 64)
@@ -172,7 +174,7 @@ final class LoupeAppTests: XCTestCase {
 
         let report = try JSONDecoder().decode(
             SessionEvidenceReport.self, from: model.evidenceJSON())
-        XCTAssertEqual(report.schemaVersion, 3)
+        XCTAssertEqual(report.schemaVersion, 4)
         XCTAssertEqual(report.eventSource.sha256.count, 64)
         XCTAssertEqual(report.telemetrySource.sha256.count, 64)
         XCTAssertEqual(report.eventCount, 16)

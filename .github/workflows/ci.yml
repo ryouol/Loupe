@@ -50,6 +50,12 @@ jobs:
       - name: Validate bundled sample
         run: .venv/bin/python scripts/validate-sample.py
 
+      - name: Replay and audit the real MLX investigation
+        run: |
+          mkdir -p .build/investigation
+          tar -xzf investigations/mlx-2026-09-16/recordings.tar.gz -C .build/investigation
+          .venv/bin/python scripts/check-investigation.py .build/investigation/verified --manifest investigations/mlx-2026-09-16/SHA256.json
+
       - name: Build unsigned package smoke artifact
         env:
           LOUPE_RELEASE_TESTS_PASSED: "1"

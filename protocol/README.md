@@ -76,3 +76,19 @@ under [`examples/`](examples/) and validate v3 against the schema. Decoders
 never crash on malformed input: every bad line becomes a typed drop reason and
 a counter bump, lines over 64 KB are rejected before parsing, and numeric
 ranges match the Swift `UInt32`/`UInt64` and `Int32` wire types exactly.
+
+## MLX phase boundaries (September 16 investigation)
+
+The current MLX adapter observes `prompt_progress_callback(processed == total - 1)`
+after evaluated prompt chunks. Its `prefill_end` milestone includes host setup
+before those chunks; `decodeDurationNs` spans that observed boundary through the
+last runtime response, including the final prompt-token forward pass and first
+output token. These host observations are not exclusive GPU kernel time. TTFT
+remains request-start to first output-token receipt (which may precede nonempty
+rendered text). Runtime paths without the callback leave decode duration absent.
+Older MLX captures reconstructed this boundary using `prompt_tps` and can include
+host setup in reported decode time; do not compare their decode rates with the
+corrected measurements. See the pinned source and independent receipts in the
+[case study](../docs/MLX_CASE_STUDY.md). Evidence export schema 4 adds
+`requestOutcomes` / CSV `request_outcome` rows to preserve cancelled and incomplete
+requests alongside the available metrics.

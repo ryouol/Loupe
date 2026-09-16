@@ -1,5 +1,11 @@
 # Loupe
 
+Real local performance evidence: [MLX case study](docs/MLX_CASE_STUDY.md),
+[three-minute replay demo](docs/MLX_DEMO.md), and
+[offline serving-artifact import](docs/SERVING_IMPORT.md). The September 16
+profiling milestone includes a repeated host-side optimization experiment;
+signing and notarization remain separate.
+
 Loupe is a local-first macOS profiler for Apple Silicon inference. It places
 model load, prefill, decode, and provenance-typed memory events (including
 modeled KV where defensible) on the same timeline as
